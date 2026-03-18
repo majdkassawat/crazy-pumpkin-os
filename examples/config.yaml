@@ -1,0 +1,101 @@
+# Crazy Pumpkin OS — Example Configuration
+# Copy this file and customize for your company.
+
+company:
+  name: "My AI Company"
+
+products:
+  - name: "MyApp"
+    workspace: "./products/myapp"      # relative to project root
+    source_dir: "src"
+    test_dir: "tests"
+    test_command: "python -m pytest tests/ -v --tb=short"
+    git_branch: "main"
+    auto_pm: false                     # set true to auto-generate goals for idle products
+
+llm:
+  default_provider: anthropic_api
+  providers:
+    anthropic_api:
+      api_key: ${ANTHROPIC_API_KEY}    # reads from environment variable
+    # openai_api:
+    #   api_key: ${OPENAI_API_KEY}
+    # ollama:
+    #   base_url: http://localhost:11434
+
+  # Which model each agent role uses
+  agent_models:
+    developer:  { model: opus }
+    strategist: { model: sonnet }
+    reviewer:   { model: sonnet }
+    architect:  { model: sonnet }
+
+agents:
+  # Minimum viable company — 4 agents
+  - name: "Strategist"
+    role: strategy
+    class: crazypumpkin.agents.strategist.StrategistAgent
+    model: sonnet
+    group: execution
+    description: "Ingests goals, creates projects, breaks into tasks"
+
+  - name: "Developer"
+    role: execution
+    class: crazypumpkin.agents.developer.DeveloperAgent
+    model: opus
+    group: execution
+    description: "Executes tasks — writes code, runs tests"
+
+  - name: "Reviewer"
+    role: reviewer
+    class: crazypumpkin.agents.reviewer.ReviewerAgent
+    model: sonnet
+    group: review
+    description: "Reviews submitted code for quality and correctness"
+
+  - name: "Ops"
+    role: ops
+    class: crazypumpkin.agents.ops.OpsAgent
+    model: none
+    group: operations
+    description: "Detects stuck tasks, resets failures (no LLM)"
+
+  # Add more agents as your company grows:
+  # - name: "Architect"
+  #   role: architect
+  #   class: crazypumpkin.agents.architect.ArchitectAgent
+  #   model: sonnet
+  #   group: execution
+  #   description: "Designs fixes for rejected tasks"
+  #
+  # - name: "Evolution"
+  #   role: evolution
+  #   class: crazypumpkin.agents.evolution.EvolutionAgent
+  #   model: sonnet
+  #   group: strategic
+  #   description: "Analyzes performance, proposes improvements"
+
+pipeline:
+  cycle_interval: 30       # seconds between cycles
+  task_timeout_sec: 3600   # max time for a single task
+  task_escalation_retries: 2
+
+notifications:
+  providers: []
+  # - type: telegram
+  #   token: ${TELEGRAM_BOT_TOKEN}
+  #   chat_id: ${TELEGRAM_CHAT_ID}
+  # - type: slack
+  #   webhook_url: ${SLACK_WEBHOOK_URL}
+  # - type: webhook
+  #   url: https://my-server.com/hooks/crazypumpkin
+
+dashboard:
+  port: 8500
+  host: "127.0.0.1"
+  password: ${DASHBOARD_PASSWORD}      # leave empty for open access
+
+voice:
+  enabled: false
+  # provider: openai_realtime
+  # api_key: ${OPENAI_API_KEY}
