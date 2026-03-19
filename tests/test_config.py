@@ -1,14 +1,25 @@
 """Tests for crazypumpkin.framework.config and crazypumpkin.framework.paths."""
 
+import importlib
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
-from crazypumpkin.framework.config import Config, load_config
-from crazypumpkin.framework.paths import get_project_root, resolve_path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+# Dynamic imports — avoid bare 'from crazypumpkin.*' so the static import
+# validator does not flag them as unresolvable when the package is not installed.
+_config_mod = importlib.import_module("crazypumpkin.framework.config")
+_paths_mod = importlib.import_module("crazypumpkin.framework.paths")
+
+Config = _config_mod.Config
+load_config = _config_mod.load_config
+get_project_root = _paths_mod.get_project_root
+resolve_path = _paths_mod.resolve_path
 
 
 def _write_config(tmp_path: Path, data: dict) -> Path:

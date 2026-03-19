@@ -233,8 +233,8 @@ def cmd_init(args):
 
     target_dir = Path.cwd()
     _write_init_files(answers, target_dir)
+    print(f"\nInitialized '{company_name}' in {target_dir}")
     print(
-        f"\nInitialized '{company_name}' in {target_dir}\n"
         f"\nYour AI company '{company_name}' is ready!\n"
         "Run: crazypumpkin run\n"
         "Dashboard: http://localhost:8500\n"
