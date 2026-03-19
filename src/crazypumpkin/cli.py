@@ -12,12 +12,189 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
+
+
+def _write_init_files(answers: dict, target_dir: Path) -> None:
+    """Generate initial project files from wizard answers.
+
+    Args:
+        answers: dict with keys 'company_name', 'provider', 'product_path',
+                 'api_key', 'dashboard_password'.
+        target_dir: directory where the files will be written.
+    """
+    target_dir = Path(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    company_name = answers["company_name"]
+    provider = answers["provider"]
+    product_path = answers["product_path"]
+    api_key = answers["api_key"]
+    dashboard_password = answers.get("dashboard_password", "")
+
+    # Determine env-var name for the API key based on provider
+    provider_env_vars = {
+        "anthropic_api": "ANTHROPIC_API_KEY",
+        "openai_api": "OPENAI_API_KEY",
+        "ollama": "OLLAMA_API_KEY",
+    }
+    api_key_env = provider_env_vars.get(provider, "API_KEY")
+
+    # --- config.yaml ---
+    config_yaml = (
+        "# Crazy Pumpkin OS — Configuration\n"
+        "\n"
+        "company:\n"
+        f'  name: "{company_name}"\n'
+        "\n"
+        "products:\n"
+        f'  - name: "{company_name} Product"\n'
+        f'    workspace: "{product_path}"\n'
+        '    source_dir: "src"\n'
+        '    test_dir: "tests"\n'
+        '    test_command: "python -m pytest tests/ -v --tb=short"\n'
+        '    git_branch: "main"\n'
+        "    auto_pm: false\n"
+        "\n"
+        "llm:\n"
+        f"  default_provider: {provider}\n"
+        "  providers:\n"
+        f"    {provider}:\n"
+        f"      api_key: ${{{api_key_env}}}\n"
+        "\n"
+        "  agent_models:\n"
+        "    developer:  { model: opus }\n"
+        "    strategist: { model: sonnet }\n"
+        "    reviewer:   { model: sonnet }\n"
+        "    architect:  { model: sonnet }\n"
+        "\n"
+        "agents:\n"
+        '  - name: "Strategist"\n'
+        "    role: strategy\n"
+        "    class: crazypumpkin.agents.strategist.StrategistAgent\n"
+        "    model: sonnet\n"
+        "    group: execution\n"
+        '    description: "Ingests goals, creates projects, breaks into tasks"\n'
+        "\n"
+        '  - name: "Developer"\n'
+        "    role: execution\n"
+        "    class: crazypumpkin.agents.developer.DeveloperAgent\n"
+        "    model: opus\n"
+        "    group: execution\n"
+        '    description: "Executes tasks — writes code, runs tests"\n'
+        "\n"
+        '  - name: "Reviewer"\n'
+        "    role: reviewer\n"
+        "    class: crazypumpkin.agents.reviewer.ReviewerAgent\n"
+        "    model: sonnet\n"
+        "    group: review\n"
+        '    description: "Reviews submitted code for quality and correctness"\n'
+        "\n"
+        '  - name: "Ops"\n'
+        "    role: ops\n"
+        "    class: crazypumpkin.agents.ops.OpsAgent\n"
+        "    model: none\n"
+        "    group: operations\n"
+        '    description: "Detects stuck tasks, resets failures (no LLM)"\n'
+        "\n"
+        "pipeline:\n"
+        "  cycle_interval: 30\n"
+        "  task_timeout_sec: 3600\n"
+        "  task_escalation_retries: 2\n"
+        "\n"
+        "notifications:\n"
+        "  providers: []\n"
+        "\n"
+        "dashboard:\n"
+        "  port: 8500\n"
+        '  host: "127.0.0.1"\n'
+        "  password: ${DASHBOARD_PASSWORD}\n"
+        "\n"
+        "voice:\n"
+        "  enabled: false\n"
+    )
+    (target_dir / "config.yaml").write_text(config_yaml, encoding="utf-8")
+
+    # --- .env ---
+    env_content = (
+        f"{api_key_env}={api_key}\n"
+        f"DASHBOARD_PASSWORD={dashboard_password}\n"
+    )
+    (target_dir / ".env").write_text(env_content, encoding="utf-8")
+
+    # --- .gitignore ---
+    gitignore_content = ".env\ndata/\n__pycache__\n"
+    (target_dir / ".gitignore").write_text(gitignore_content, encoding="utf-8")
+
+    # --- goals/ directory ---
+    (target_dir / "goals").mkdir(exist_ok=True)
+
+    # --- README.md ---
+    readme_content = (
+        f"# {company_name}\n"
+        "\n"
+        f"An autonomous AI company powered by [Crazy Pumpkin OS](https://github.com/crazypumpkin).\n"
+        "\n"
+        "## How to use\n"
+        "\n"
+        "1. **Review configuration** — edit `config.yaml` to add products and tweak agent settings.\n"
+        "2. **Add goals** — drop YAML files into the `goals/` directory describing what you want built.\n"
+        "3. **Run the pipeline**:\n"
+        "   ```bash\n"
+        "   crazypumpkin run\n"
+        "   ```\n"
+        "4. **Monitor progress** — open the dashboard:\n"
+        "   ```bash\n"
+        "   crazypumpkin dashboard\n"
+        "   ```\n"
+        "\n"
+        "## Project structure\n"
+        "\n"
+        "| Path | Purpose |\n"
+        "| --- | --- |\n"
+        "| `config.yaml` | Company & agent configuration |\n"
+        "| `goals/` | Goal definitions for the strategist |\n"
+        "| `.env` | API keys and secrets (not committed) |\n"
+    )
+    (target_dir / "README.md").write_text(readme_content, encoding="utf-8")
 
 
 def cmd_init(args):
     """Interactive setup wizard for a new AI company."""
-    # TODO: implement init wizard
-    print("crazypumpkin init — coming soon")
+    print("🎃 Crazy Pumpkin OS — New AI Company Setup\n")
+
+    # 1. Company name
+    company_name = input("Company name [My AI Company]: ").strip()
+    if not company_name:
+        company_name = "My AI Company"
+
+    # 2. LLM provider
+    providers = ["anthropic_api", "openai_api", "ollama"]
+    print(f"Available LLM providers: {', '.join(providers)}")
+    provider = input("LLM provider [anthropic_api]: ").strip()
+    if not provider:
+        provider = "anthropic_api"
+
+    # 3. API key
+    api_key = input("API key (leave blank to use env var later): ").strip()
+
+    # 4. First product path
+    product_path = input("First product workspace path (optional): ").strip()
+
+    # 5. Dashboard password
+    dashboard_password = input("Dashboard password (optional): ").strip()
+
+    answers = {
+        "company_name": company_name,
+        "provider": provider,
+        "api_key": api_key,
+        "product_path": product_path,
+        "dashboard_password": dashboard_password,
+    }
+
+    target_dir = Path.cwd()
+    _write_init_files(answers, target_dir)
+    print(f"\nInitialized '{company_name}' in {target_dir}")
 
 
 def cmd_run(args):
