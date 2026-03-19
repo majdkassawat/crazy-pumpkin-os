@@ -6,11 +6,14 @@ All models are dataclasses — no external dependencies.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
+logger = logging.getLogger("crazypumpkin.models")
 
 
 def _now() -> str:

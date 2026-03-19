@@ -48,5 +48,8 @@ Documentation = "https://github.com/majdkassawat/crazy-pumpkin-os/tree/main/docs
 Repository = "https://github.com/majdkassawat/crazy-pumpkin-os"
 Issues = "https://github.com/majdkassawat/crazy-pumpkin-os/issues"
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
 [tool.setuptools.packages.find]
 where = ["src"]

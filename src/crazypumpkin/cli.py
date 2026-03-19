@@ -62,6 +62,7 @@ def _write_init_files(answers: dict, target_dir: Path) -> None:
         f"    {provider}:\n"
         f"      api_key: ${{{api_key_env}}}\n"
         "\n"
+        "  # Which model each agent role uses\n"
         "  agent_models:\n"
         "    developer:  { model: opus }\n"
         "    strategist: { model: sonnet }\n"
@@ -69,6 +70,7 @@ def _write_init_files(answers: dict, target_dir: Path) -> None:
         "    architect:  { model: sonnet }\n"
         "\n"
         "agents:\n"
+        "  # Minimum viable company — 4 agents\n"
         '  - name: "Strategist"\n'
         "    role: strategy\n"
         "    class: crazypumpkin.agents.strategist.StrategistAgent\n"
@@ -97,21 +99,45 @@ def _write_init_files(answers: dict, target_dir: Path) -> None:
         "    group: operations\n"
         '    description: "Detects stuck tasks, resets failures (no LLM)"\n'
         "\n"
+        "  # Add more agents as your company grows:\n"
+        '  # - name: "Architect"\n'
+        "  #   role: architect\n"
+        "  #   class: crazypumpkin.agents.architect.ArchitectAgent\n"
+        "  #   model: sonnet\n"
+        "  #   group: execution\n"
+        '  #   description: "Designs fixes for rejected tasks"\n'
+        "  #\n"
+        '  # - name: "Evolution"\n'
+        "  #   role: evolution\n"
+        "  #   class: crazypumpkin.agents.evolution.EvolutionAgent\n"
+        "  #   model: sonnet\n"
+        "  #   group: strategic\n"
+        '  #   description: "Analyzes performance, proposes improvements"\n'
+        "\n"
         "pipeline:\n"
-        "  cycle_interval: 30\n"
-        "  task_timeout_sec: 3600\n"
+        "  cycle_interval: 30       # seconds between cycles\n"
+        "  task_timeout_sec: 3600   # max time for a single task\n"
         "  task_escalation_retries: 2\n"
         "\n"
         "notifications:\n"
         "  providers: []\n"
+        "  # - type: telegram\n"
+        "  #   token: ${TELEGRAM_BOT_TOKEN}\n"
+        "  #   chat_id: ${TELEGRAM_CHAT_ID}\n"
+        "  # - type: slack\n"
+        "  #   webhook_url: ${SLACK_WEBHOOK_URL}\n"
+        "  # - type: webhook\n"
+        "  #   url: https://my-server.com/hooks/crazypumpkin\n"
         "\n"
         "dashboard:\n"
         "  port: 8500\n"
         '  host: "127.0.0.1"\n'
-        "  password: ${DASHBOARD_PASSWORD}\n"
+        "  password: ${DASHBOARD_PASSWORD}      # leave empty for open access\n"
         "\n"
         "voice:\n"
         "  enabled: false\n"
+        "  # provider: openai_realtime\n"
+        "  # api_key: ${OPENAI_API_KEY}\n"
     )
     (target_dir / "config.yaml").write_text(config_yaml, encoding="utf-8")
 
@@ -123,7 +149,7 @@ def _write_init_files(answers: dict, target_dir: Path) -> None:
     (target_dir / ".env").write_text(env_content, encoding="utf-8")
 
     # --- .gitignore ---
-    gitignore_content = ".env\ndata/\n__pycache__\n"
+    gitignore_content = ".env\ndata/\n__pycache__/\n"
     (target_dir / ".gitignore").write_text(gitignore_content, encoding="utf-8")
 
     # --- goals/ directory ---
@@ -195,29 +221,29 @@ def cmd_init(args):
     target_dir = Path.cwd()
     _write_init_files(answers, target_dir)
     print(f"\nInitialized '{company_name}' in {target_dir}")
+    print(f"\nYour AI company '{company_name}' is ready!")
+    print("Run: crazypumpkin run")
+    print("Dashboard: http://localhost:8500")
+    print("Create goals: drop .goal files in goals/")
 
 
 def cmd_run(args):
     """Start the pipeline."""
-    # TODO: implement pipeline runner
     print("crazypumpkin run — coming soon")
 
 
 def cmd_dashboard(args):
     """Start the web dashboard."""
-    # TODO: implement dashboard launcher
     print("crazypumpkin dashboard — coming soon")
 
 
 def cmd_goal(args):
     """Create a new goal."""
-    # TODO: implement goal creation
     print("crazypumpkin goal — coming soon")
 
 
 def cmd_status(args):
     """Show current company status."""
-    # TODO: implement status
     print("crazypumpkin status — coming soon")
 
 
