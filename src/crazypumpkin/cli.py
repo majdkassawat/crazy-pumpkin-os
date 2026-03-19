@@ -18,6 +18,15 @@ from pathlib import Path
 def _write_init_files(answers: dict, target_dir: Path) -> None:
     """Generate initial project files from wizard answers.
 
+    Writes config.yaml (with company, products, llm, agents, pipeline,
+    notifications, dashboard, and voice sections), .env, .gitignore,
+    goals/ directory, and README.md.
+
+    The ``llm`` section maps the chosen provider to its environment-variable
+    name via *provider_env_vars*, sets ``llm.default_provider``, writes a
+    single ``llm.providers.<provider>.api_key`` entry using the
+    ``${ENV_VAR}`` reference format, and includes the ``agent_models`` block.
+
     Args:
         answers: dict with keys 'company_name', 'provider', 'product_path',
                  'api_key', 'dashboard_password'.
@@ -54,7 +63,7 @@ def _write_init_files(answers: dict, target_dir: Path) -> None:
         '    test_dir: "tests"\n'
         '    test_command: "python -m pytest tests/ -v --tb=short"\n'
         '    git_branch: "main"\n'
-        "    auto_pm: false\n"
+        "    auto_pm: false                     # set true to auto-generate goals for idle products\n"
         "\n"
         "llm:\n"
         f"  default_provider: {provider}\n"
@@ -149,7 +158,11 @@ def _write_init_files(answers: dict, target_dir: Path) -> None:
     (target_dir / ".env").write_text(env_content, encoding="utf-8")
 
     # --- .gitignore ---
-    gitignore_content = ".env\ndata/\n__pycache__/\n"
+    gitignore_content = (
+        ".env\n"
+        "data/\n"
+        "__pycache__/\n"
+    )
     (target_dir / ".gitignore").write_text(gitignore_content, encoding="utf-8")
 
     # --- goals/ directory ---
@@ -198,7 +211,7 @@ def cmd_init(args):
     providers = ["anthropic_api", "openai_api", "ollama"]
     print(f"Available LLM providers: {', '.join(providers)}")
     provider = input("LLM provider [anthropic_api]: ").strip()
-    if not provider:
+    if provider not in providers:
         provider = "anthropic_api"
 
     # 3. API key
@@ -220,11 +233,13 @@ def cmd_init(args):
 
     target_dir = Path.cwd()
     _write_init_files(answers, target_dir)
-    print(f"\nInitialized '{company_name}' in {target_dir}")
-    print(f"\nYour AI company '{company_name}' is ready!")
-    print("Run: crazypumpkin run")
-    print("Dashboard: http://localhost:8500")
-    print("Create goals: drop .goal files in goals/")
+    print(
+        f"\nInitialized '{company_name}' in {target_dir}\n"
+        f"\nYour AI company '{company_name}' is ready!\n"
+        "Run: crazypumpkin run\n"
+        "Dashboard: http://localhost:8500\n"
+        "Create goals: drop .goal files in goals/"
+    )
 
 
 def cmd_run(args):
