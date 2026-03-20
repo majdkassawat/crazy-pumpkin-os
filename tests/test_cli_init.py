@@ -1,13 +1,16 @@
-"""Tests for crazypumpkin.cli._write_init_files."""
+"""Tests for crazypumpkin.cli._write_init_files and cmd_init next-steps output."""
 
+import io
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from crazypumpkin.cli import _write_init_files
+from crazypumpkin.cli import _write_init_files, cmd_init
 
 
 @pytest.fixture()
@@ -64,6 +67,28 @@ def test_env_file_openai_provider(tmp_path, answers):
     _write_init_files(answers, tmp_path)
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
     assert "OPENAI_API_KEY=sk-test-key" in env_text
+
+
+def test_env_file_ollama_provider(tmp_path, answers):
+    """Provider ollama maps to OLLAMA_API_KEY in .env."""
+    answers["provider"] = "ollama"
+    _write_init_files(answers, tmp_path)
+    env_text = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "OLLAMA_API_KEY=sk-test-key" in env_text
+
+
+def test_env_file_unknown_provider_fallback(tmp_path, answers):
+    """Unknown provider falls back to API_KEY in .env."""
+    answers["provider"] = "some_custom_provider"
+    _write_init_files(answers, tmp_path)
+    lines = (tmp_path / ".env").read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "API_KEY=sk-test-key"
+
+
+def test_gitignore_created(tmp_path, answers):
+    """.gitignore file is created in the target directory."""
+    _write_init_files(answers, tmp_path)
+    assert (tmp_path / ".gitignore").exists()
 
 
 def test_gitignore_excludes_env(tmp_path, answers):
@@ -139,3 +164,42 @@ def test_products_exactly_one_entry(tmp_path, answers):
     cfg = _load_config(tmp_path)
     assert isinstance(cfg["products"], list)
     assert len(cfg["products"]) == 1
+
+
+# --- cmd_init next-steps output tests ---
+
+
+def _run_cmd_init(tmp_path, company_name="Test Corp"):
+    """Helper: run cmd_init with mocked inputs and capture stdout."""
+    inputs = iter([company_name, "anthropic_api", "sk-test", "/tmp/product", "pass"])
+    with patch("builtins.input", side_effect=inputs), \
+         patch("crazypumpkin.cli.Path") as mock_path:
+        mock_path.cwd.return_value = tmp_path
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cmd_init(None)
+        return buf.getvalue()
+
+
+def test_next_steps_contains_company_name(tmp_path):
+    """Next-steps output contains the company name provided by the user."""
+    output = _run_cmd_init(tmp_path, "Acme AI")
+    assert "Acme AI" in output
+
+
+def test_next_steps_contains_run_command(tmp_path):
+    """Next-steps output contains 'crazypumpkin run'."""
+    output = _run_cmd_init(tmp_path)
+    assert "crazypumpkin run" in output
+
+
+def test_next_steps_contains_dashboard_url(tmp_path):
+    """Next-steps output contains 'http://localhost:8500'."""
+    output = _run_cmd_init(tmp_path)
+    assert "http://localhost:8500" in output
+
+
+def test_next_steps_contains_goals_dir(tmp_path):
+    """Next-steps output contains 'goals/'."""
+    output = _run_cmd_init(tmp_path)
+    assert "goals/" in output
