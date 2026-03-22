@@ -151,14 +151,17 @@ class TestProviderRegistryRouting:
         registry = _make_registry(
             {"developer": {"provider": "mock_a", "model": "opus"}}
         )
-        # Wrap the underlying provider's call_json with a MagicMock
+        # Wrap the underlying provider's call_json with a MagicMock so we can
+        # inspect the exact arguments the registry dispatches.
         provider, _ = registry.get_provider("developer")
         provider.call_json = mock.MagicMock(return_value={"forwarded": True})
 
         result = registry.call_json("test prompt", agent="developer")
 
+        # The registry must inject model='opus' from the agent config.
         provider.call_json.assert_called_once_with("test prompt", model="opus")
         assert isinstance(result, dict)
+        assert result == {"forwarded": True}
 
     def test_call_json_omits_model_when_no_override(self):
         """call_json does NOT pass a model kwarg when the agent has no override."""
@@ -168,10 +171,12 @@ class TestProviderRegistryRouting:
 
         result = registry.call_json("test prompt")
 
+        # No agent model configured → model kwarg must be absent.
         provider.call_json.assert_called_once_with("test prompt")
         call_kwargs = provider.call_json.call_args.kwargs
         assert "model" not in call_kwargs
         assert isinstance(result, dict)
+        assert result == {"no_model": True}
 
     def test_raises_for_missing_provider(self):
         config = {

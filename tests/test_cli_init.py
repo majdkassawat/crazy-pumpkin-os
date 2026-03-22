@@ -118,6 +118,37 @@ def test_config_yaml_created(tmp_path, answers):
     assert (tmp_path / "config.yaml").exists()
 
 
+def test_target_dir_created_with_mkdir(tmp_path, answers):
+    """target_dir is created with mkdir(parents=True, exist_ok=True)."""
+    nested = tmp_path / "a" / "b" / "c"
+    _write_init_files(answers, nested)
+    assert nested.is_dir()
+    assert (nested / "config.yaml").exists()
+
+
+def test_target_dir_exists_ok(tmp_path, answers):
+    """mkdir does not fail when target_dir already exists (exist_ok=True)."""
+    tmp_path.mkdir(parents=True, exist_ok=True)  # already exists
+    _write_init_files(answers, tmp_path)
+    assert (tmp_path / "config.yaml").exists()
+
+
+def test_config_yaml_utf8_encoding(tmp_path, answers):
+    """config.yaml is written with utf-8 encoding."""
+    answers["company_name"] = "Ünïcödé Corp"
+    _write_init_files(answers, tmp_path)
+    text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert "Ünïcödé Corp" in text
+
+
+def test_target_dir_cast_to_path(answers):
+    """target_dir is cast to Path (string input works)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        _write_init_files(answers, td)  # pass string, not Path
+        assert Path(td, "config.yaml").exists()
+
+
 def test_goals_dir_created(tmp_path, answers):
     """goals/ directory is created."""
     _write_init_files(answers, tmp_path)
@@ -164,6 +195,67 @@ def test_products_exactly_one_entry(tmp_path, answers):
     cfg = _load_config(tmp_path)
     assert isinstance(cfg["products"], list)
     assert len(cfg["products"]) == 1
+
+
+# --- Company section tests ---
+
+def test_company_name_from_answers(tmp_path, answers):
+    """config.yaml company.name matches answers['company_name']."""
+    _write_init_files(answers, tmp_path)
+    cfg = _load_config(tmp_path)
+    assert cfg["company"]["name"] == answers["company_name"]
+
+
+# --- LLM section tests ---
+
+def test_llm_default_provider(tmp_path, answers):
+    """config.yaml llm.default_provider matches answers['provider']."""
+    _write_init_files(answers, tmp_path)
+    cfg = _load_config(tmp_path)
+    assert cfg["llm"]["default_provider"] == answers["provider"]
+
+
+def test_llm_anthropic_api_key_env_var(tmp_path, answers):
+    """anthropic_api provider uses ${ANTHROPIC_API_KEY} in config.yaml."""
+    answers["provider"] = "anthropic_api"
+    _write_init_files(answers, tmp_path)
+    text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert "${ANTHROPIC_API_KEY}" in text
+
+
+def test_llm_openai_api_key_env_var(tmp_path, answers):
+    """openai_api provider uses ${OPENAI_API_KEY} in config.yaml."""
+    answers["provider"] = "openai_api"
+    _write_init_files(answers, tmp_path)
+    text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert "${OPENAI_API_KEY}" in text
+
+
+def test_llm_ollama_api_key_env_var(tmp_path, answers):
+    """ollama provider uses ${OLLAMA_API_KEY} in config.yaml."""
+    answers["provider"] = "ollama"
+    _write_init_files(answers, tmp_path)
+    text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert "${OLLAMA_API_KEY}" in text
+
+
+def test_llm_unknown_provider_fallback_env_var(tmp_path, answers):
+    """Unknown provider falls back to ${API_KEY} in config.yaml."""
+    answers["provider"] = "custom_llm"
+    _write_init_files(answers, tmp_path)
+    text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert "${API_KEY}" in text
+
+
+# --- All top-level YAML sections ---
+
+def test_all_top_level_yaml_sections(tmp_path, answers):
+    """config.yaml contains all required top-level sections."""
+    _write_init_files(answers, tmp_path)
+    cfg = _load_config(tmp_path)
+    for section in ("company", "products", "llm", "agents", "pipeline",
+                    "notifications", "dashboard", "voice"):
+        assert section in cfg, f"Missing top-level section: {section}"
 
 
 # --- cmd_init next-steps output tests ---

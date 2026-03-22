@@ -1,4 +1,8 @@
-"""Tests for crazypumpkin.framework.config and crazypumpkin.framework.paths."""
+"""Tests for crazypumpkin.framework.config and crazypumpkin.framework.paths.
+
+Covers resolve_path (tilde, env-var, relative, absolute) and get_project_root
+(walk-up discovery, missing config error).
+"""
 
 import importlib
 import json
