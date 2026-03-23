@@ -178,6 +178,13 @@ class TestProviderRegistryRouting:
         assert isinstance(result, dict)
         assert result == {"no_model": True}
 
+    def test_get_provider_developer_returns_claude_opus_4_6(self):
+        registry = _make_registry(
+            {"developer": {"model": "claude-opus-4-6"}}
+        )
+        _provider, model = registry.get_provider("developer")
+        assert model == "claude-opus-4-6"
+
     def test_raises_for_missing_provider(self):
         config = {
             "default_provider": "nonexistent",

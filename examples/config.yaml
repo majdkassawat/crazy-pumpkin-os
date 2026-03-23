@@ -25,10 +25,10 @@ llm:
 
   # Which model each agent role uses
   agent_models:
-    developer:  { model: opus }
-    strategist: { model: sonnet }
-    reviewer:   { model: sonnet }
-    architect:  { model: sonnet }
+    developer:  { model: claude-opus-4-6 }
+    strategist: { model: claude-sonnet-4-6 }
+    reviewer:   { model: claude-sonnet-4-6 }
+    architect:  { model: claude-sonnet-4-6 }
 
 agents:
   # Minimum viable company — 4 agents
