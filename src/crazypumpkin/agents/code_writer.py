@@ -26,7 +26,9 @@ class CodeWriterAgent(BaseAgent):
             f"Respond with JSON: {{\"content\": \"<summary>\", \"artifacts\": {{\"<filename>\": \"<file content>\"}}}}"
         )
 
-        result = self.llm.call_json(prompt, agent="developer")
+        result = self.llm.call_json(
+            prompt, agent="developer", model=self.agent.config.model or None
+        )
 
         content: str = result.get("content", "")
         artifacts: dict[str, str] = result.get("artifacts", {})

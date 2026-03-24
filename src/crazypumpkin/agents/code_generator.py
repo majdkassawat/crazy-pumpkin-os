@@ -42,7 +42,9 @@ class CodeGeneratorAgent(BaseAgent):
             "Wrap each file in a fenced code block whose info-string is the filename."
         )
 
-        raw_response: str = self.registry.call(prompt, agent="code_generator")
+        raw_response: str = self.registry.call(
+            prompt, agent="code_generator", model=self.agent.config.model or None
+        )
 
         artifacts = _parse_fenced_blocks(raw_response)
 

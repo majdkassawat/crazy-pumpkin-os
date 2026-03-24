@@ -72,23 +72,35 @@ class ProviderRegistry:
         prompt: str,
         *,
         agent: str | None = None,
+        model: str | None = None,
         timeout: float | None = None,
         cwd: str | None = None,
         tools: list | None = None,
     ) -> str:
-        """Dispatch a text call to the provider assigned to *agent*."""
-        provider, model = self.get_provider(agent)
-        return provider.call(prompt, model=model, timeout=timeout, cwd=cwd, tools=tools)
+        """Dispatch a text call to the provider assigned to *agent*.
+
+        When *model* is provided it takes precedence over the model
+        returned by the ``agent_models`` lookup.
+        """
+        provider, agent_model = self.get_provider(agent)
+        effective_model = model if model is not None else agent_model
+        return provider.call(prompt, model=effective_model, timeout=timeout, cwd=cwd, tools=tools)
 
     def call_json(
         self,
         prompt: str,
         *,
         agent: str | None = None,
+        model: str | None = None,
         **kwargs: object,
     ) -> dict | list:
-        """Dispatch a JSON call to the provider assigned to *agent*."""
-        provider, model = self.get_provider(agent)
-        if model is not None:
-            kwargs["model"] = model
+        """Dispatch a JSON call to the provider assigned to *agent*.
+
+        When *model* is provided it takes precedence over the model
+        returned by the ``agent_models`` lookup.
+        """
+        provider, agent_model = self.get_provider(agent)
+        effective_model = model if model is not None else agent_model
+        if effective_model is not None:
+            kwargs["model"] = effective_model
         return provider.call_json(prompt, **kwargs)

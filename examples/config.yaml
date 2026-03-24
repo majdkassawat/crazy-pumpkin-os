@@ -25,7 +25,7 @@ llm:
 
   # Which model each agent role uses
   agent_models:
-    developer:  { model: claude-opus-4-6 }
+    developer:  { model: claude-sonnet-4-6 }
     strategist: { model: claude-sonnet-4-6 }
     reviewer:   { model: claude-sonnet-4-6 }
     architect:  { model: claude-sonnet-4-6 }
@@ -42,7 +42,7 @@ agents:
   - name: "Developer"
     role: execution
     class: crazypumpkin.agents.developer.DeveloperAgent
-    model: opus
+    model: sonnet
     group: execution
     description: "Executes tasks — writes code, runs tests"
 
