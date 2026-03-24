@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from crazypumpkin.agents.code_generator import CodeGeneratorAgent, _parse_fenced_blocks
-from crazypumpkin.framework.models import Agent, AgentRole, Task, TaskOutput
+from crazypumpkin.framework.models import Agent, AgentConfig, AgentRole, Task, TaskOutput
 
 
 # ---------------------------------------------------------------------------
@@ -109,3 +109,49 @@ class TestCodeGeneratorAgentNoCodeBlocks:
         assert result.content != ""
         assert result.content == LLM_RESPONSE_NO_CODE
         mock_write.assert_not_called()
+
+
+class TestCodeGeneratorAgentModelConfig:
+    """execute() passes agent config model to registry.call()."""
+
+    @mock.patch("crazypumpkin.agents.code_generator.safe_write_text")
+    def test_passes_model_from_agent_config(self, mock_write, tmp_path):
+        """When config.model is set, it is forwarded to registry.call()."""
+        registry = mock.MagicMock()
+        registry.call.return_value = LLM_RESPONSE_NO_CODE
+
+        agent_model = Agent(
+            name="test-codegen",
+            role=AgentRole.EXECUTION,
+            config=AgentConfig(model="sonnet"),
+        )
+        agent = CodeGeneratorAgent(agent_model, registry)
+        agent.execute(_make_task(), {"workspace": str(tmp_path)})
+
+        registry.call.assert_called_once()
+        call_kwargs = registry.call.call_args.kwargs
+        assert call_kwargs["model"] == "sonnet"
+
+    @mock.patch("crazypumpkin.agents.code_generator.safe_write_text")
+    def test_passes_none_when_model_config_empty(self, mock_write, tmp_path):
+        """When config.model is empty, model=None is passed (fallback to provider default)."""
+        registry = mock.MagicMock()
+        registry.call.return_value = LLM_RESPONSE_NO_CODE
+
+        agent_model = Agent(
+            name="test-codegen",
+            role=AgentRole.EXECUTION,
+            config=AgentConfig(model=""),
+        )
+        agent = CodeGeneratorAgent(agent_model, registry)
+        agent.execute(_make_task(), {"workspace": str(tmp_path)})
+
+        registry.call.assert_called_once()
+        call_kwargs = registry.call.call_args.kwargs
+        assert call_kwargs["model"] is None
+
+    @mock.patch("crazypumpkin.agents.code_generator.safe_write_text")
+    def test_sonnet_resolves_to_claude_sonnet(self, mock_write, tmp_path):
+        """When config.model is 'sonnet', AnthropicProvider resolves it to claude-sonnet-4-6."""
+        from crazypumpkin.llm.anthropic_api import MODEL_ALIASES
+        assert MODEL_ALIASES["sonnet"] == "claude-sonnet-4-6"

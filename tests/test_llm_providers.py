@@ -219,6 +219,65 @@ class TestProviderRegistryRouting:
         call_kwargs = provider.call.call_args.kwargs
         assert call_kwargs["model"] == "claude-opus-4-6"
 
+    def test_call_json_model_none_uses_agent_models(self):
+        """When model kwarg is omitted for call_json(), agent_models model is used."""
+        registry = _make_registry(
+            {"developer": {"provider": "mock_a", "model": "claude-opus-4-6"}}
+        )
+        provider, _ = registry.get_provider("developer")
+        provider.call_json = mock.MagicMock(return_value={"agent": True})
+
+        registry.call_json("prompt", agent="developer")
+
+        provider.call_json.assert_called_once_with("prompt", model="claude-opus-4-6")
+
+    def test_call_explicit_model_overrides_agent_models_opus(self):
+        """call() with explicit model kwarg overrides agent_models opus entry."""
+        registry = _make_registry(
+            {"developer": {"provider": "mock_a", "model": "opus"}}
+        )
+        provider, _ = registry.get_provider("developer")
+        provider.call = mock.MagicMock(return_value="explicit-win")
+
+        result = registry.call("prompt", agent="developer", model="my-override-model")
+
+        provider.call.assert_called_once()
+        call_kwargs = provider.call.call_args.kwargs
+        assert call_kwargs["model"] == "my-override-model", (
+            "Explicit model kwarg must override agent_models opus entry"
+        )
+        assert result == "explicit-win"
+
+    def test_call_json_explicit_model_overrides_agent_models_opus(self):
+        """call_json() with explicit model kwarg overrides agent_models opus entry."""
+        registry = _make_registry(
+            {"developer": {"provider": "mock_a", "model": "opus"}}
+        )
+        provider, _ = registry.get_provider("developer")
+        provider.call_json = mock.MagicMock(return_value={"explicit": True})
+
+        result = registry.call_json("prompt", agent="developer", model="my-override-model")
+
+        provider.call_json.assert_called_once_with("prompt", model="my-override-model")
+        assert result == {"explicit": True}
+
+    def test_call_no_model_kwarg_falls_back_to_agent_models_opus(self):
+        """Omitting model kwarg resolves from agent_models opus entry."""
+        registry = _make_registry(
+            {"developer": {"provider": "mock_a", "model": "opus"}}
+        )
+        provider, _ = registry.get_provider("developer")
+        provider.call = mock.MagicMock(return_value="fallback-opus")
+
+        result = registry.call("prompt", agent="developer")
+
+        provider.call.assert_called_once()
+        call_kwargs = provider.call.call_args.kwargs
+        assert call_kwargs["model"] == "opus", (
+            "Without explicit model kwarg, agent_models opus must be used"
+        )
+        assert result == "fallback-opus"
+
     def test_get_provider_developer_returns_claude_opus_4_6(self):
         registry = _make_registry(
             {"developer": {"model": "claude-opus-4-6"}}

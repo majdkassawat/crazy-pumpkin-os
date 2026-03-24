@@ -25,10 +25,11 @@ llm:
 
   # Which model each agent role uses
   agent_models:
-    developer:  { model: claude-sonnet-4-6 }
+    developer:  { model: sonnet }
     strategist: { model: claude-sonnet-4-6 }
     reviewer:   { model: claude-sonnet-4-6 }
     architect:  { model: claude-sonnet-4-6 }
+    strategy_agent: { model: claude-sonnet-4-6 }
 
 agents:
   # Minimum viable company — 4 agents
