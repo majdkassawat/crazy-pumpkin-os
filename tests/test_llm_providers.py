@@ -178,6 +178,47 @@ class TestProviderRegistryRouting:
         assert isinstance(result, dict)
         assert result == {"no_model": True}
 
+    def test_call_model_override_takes_precedence(self):
+        """When model is supplied to call(), it overrides agent_models lookup."""
+        registry = _make_registry(
+            {"developer": {"provider": "mock_a", "model": "claude-opus-4-6"}}
+        )
+        provider, _ = registry.get_provider("developer")
+        provider.call = mock.MagicMock(return_value="overridden")
+
+        result = registry.call("prompt", agent="developer", model="custom-model")
+
+        provider.call.assert_called_once()
+        call_kwargs = provider.call.call_args.kwargs
+        assert call_kwargs["model"] == "custom-model"
+        assert result == "overridden"
+
+    def test_call_json_model_override_takes_precedence(self):
+        """When model is supplied to call_json(), it overrides agent_models lookup."""
+        registry = _make_registry(
+            {"developer": {"provider": "mock_a", "model": "claude-opus-4-6"}}
+        )
+        provider, _ = registry.get_provider("developer")
+        provider.call_json = mock.MagicMock(return_value={"overridden": True})
+
+        result = registry.call_json("prompt", agent="developer", model="custom-model")
+
+        provider.call_json.assert_called_once_with("prompt", model="custom-model")
+        assert result == {"overridden": True}
+
+    def test_call_model_none_uses_agent_models(self):
+        """When model is None, the agent_models lookup model is used."""
+        registry = _make_registry(
+            {"developer": {"provider": "mock_a", "model": "claude-opus-4-6"}}
+        )
+        provider, _ = registry.get_provider("developer")
+        provider.call = mock.MagicMock(return_value="agent-model")
+
+        registry.call("prompt", agent="developer")
+
+        call_kwargs = provider.call.call_args.kwargs
+        assert call_kwargs["model"] == "claude-opus-4-6"
+
     def test_get_provider_developer_returns_claude_opus_4_6(self):
         registry = _make_registry(
             {"developer": {"model": "claude-opus-4-6"}}
