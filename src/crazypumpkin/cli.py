@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 
@@ -243,8 +244,38 @@ def cmd_init(args):
 
 
 def cmd_run(args):
-    """Start the pipeline."""
-    print("crazypumpkin run — coming soon")
+    """Start the pipeline.
+
+    Loads configuration, instantiates the Scheduler, and runs pipeline
+    cycles.  In continuous mode (the default) cycles repeat every
+    *pipeline.cycle_interval* seconds (overridable with ``--interval``).
+    With ``--once`` a single cycle is executed and the process exits.
+    """
+    from crazypumpkin.framework.config import load_config
+    from crazypumpkin.scheduler.scheduler import Scheduler
+
+    config = load_config()
+    scheduler = Scheduler(config)
+
+    once: bool = getattr(args, "once", False)
+    interval: int | None = getattr(args, "interval", None)
+
+    cycle_interval = interval if interval is not None else config.pipeline.get("cycle_interval", 30)
+
+    if once:
+        print("Running single pipeline cycle …")
+        result = scheduler.run_once()
+        print(f"Cycle complete: {result}")
+        return
+
+    print(f"Starting continuous pipeline (interval={cycle_interval}s). Press Ctrl+C to stop.")
+    try:
+        while True:
+            result = scheduler.run_once()
+            print(f"Cycle complete: {result}")
+            time.sleep(cycle_interval)
+    except KeyboardInterrupt:
+        print("\nPipeline stopped by user.")
 
 
 def cmd_dashboard(args):
@@ -270,7 +301,15 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("init", help="Set up a new AI company")
-    sub.add_parser("run", help="Start the pipeline")
+    run_parser = sub.add_parser("run", help="Start the pipeline")
+    run_parser.add_argument(
+        "--once", action="store_true", default=False,
+        help="Execute a single cycle then exit",
+    )
+    run_parser.add_argument(
+        "--interval", type=int, default=None,
+        help="Override pipeline.cycle_interval (seconds between cycles)",
+    )
     sub.add_parser("dashboard", help="Start the web dashboard")
 
     goal_parser = sub.add_parser("goal", help="Create a new goal")

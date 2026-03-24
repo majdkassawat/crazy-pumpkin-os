@@ -62,12 +62,17 @@ def _validate_and_build(raw: dict, project_root: Path) -> Config:
         if ws:
             product["workspace"] = str(resolve_path(ws, project_root))
 
+    # pipeline defaults
+    pipeline = raw.get("pipeline") or {}
+    pipeline.setdefault("cycle_interval", 30)
+    pipeline["cycle_interval"] = int(pipeline["cycle_interval"])
+
     return Config(
         company=company,
         products=products,
         llm=raw.get("llm") or {},
         agents=agents,
-        pipeline=raw.get("pipeline") or {},
+        pipeline=pipeline,
         notifications=raw.get("notifications") or {},
         dashboard=raw.get("dashboard") or {},
         voice=raw.get("voice") or {},
