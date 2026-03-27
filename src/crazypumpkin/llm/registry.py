@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from crazypumpkin.framework.models import AgentConfig, BudgetExceededError
+from crazypumpkin.framework.store import Store
 from crazypumpkin.llm.anthropic_api import AnthropicProvider
 from crazypumpkin.llm.base import LLMProvider
 from crazypumpkin.llm.openai_api import OpenAIProvider
@@ -28,8 +30,9 @@ class ProviderRegistry:
         }
     """
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, store: Store | None = None) -> None:
         self._config = config
+        self._store = store
         self._default_provider_name: str = config["default_provider"]
         self._agent_models: dict[str, dict] = config.get("agent_models", {})
 
@@ -67,11 +70,25 @@ class ProviderRegistry:
             )
         return provider, model
 
+    def _check_budget(self, agent: str | None, agent_config: AgentConfig | None = None) -> None:
+        """Raise ``BudgetExceededError`` if the agent has exceeded its budget.
+
+        When *agent_config* is not provided the check is skipped (callers
+        that don't track budgets can omit it).
+        """
+        if agent is None or self._store is None or agent_config is None:
+            return
+        if self._store.is_budget_exceeded(agent, agent_config):
+            m = self._store._agent_metrics.get(agent)
+            spent = m.budget_spent_usd if m else 0.0
+            raise BudgetExceededError(agent, spent, agent_config.monthly_budget_usd)
+
     def call(
         self,
         prompt: str,
         *,
         agent: str | None = None,
+        agent_config: AgentConfig | None = None,
         model: str | None = None,
         timeout: float | None = None,
         cwd: str | None = None,
@@ -81,7 +98,11 @@ class ProviderRegistry:
 
         When *model* is provided it takes precedence over the model
         returned by the ``agent_models`` lookup.
+
+        Raises ``BudgetExceededError`` if the agent has exceeded its
+        monthly budget cap.
         """
+        self._check_budget(agent, agent_config)
         provider, agent_model = self.get_provider(agent)
         effective_model = model if model is not None else agent_model
         return provider.call(prompt, model=effective_model, timeout=timeout, cwd=cwd, tools=tools)
@@ -91,6 +112,7 @@ class ProviderRegistry:
         prompt: str,
         *,
         agent: str | None = None,
+        agent_config: AgentConfig | None = None,
         model: str | None = None,
         **kwargs: object,
     ) -> dict | list:
@@ -98,7 +120,11 @@ class ProviderRegistry:
 
         When *model* is provided it takes precedence over the model
         returned by the ``agent_models`` lookup.
+
+        Raises ``BudgetExceededError`` if the agent has exceeded its
+        monthly budget cap.
         """
+        self._check_budget(agent, agent_config)
         provider, agent_model = self.get_provider(agent)
         effective_model = model if model is not None else agent_model
         if effective_model is not None:

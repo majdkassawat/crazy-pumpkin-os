@@ -16,6 +16,18 @@ from typing import Any
 logger = logging.getLogger("crazypumpkin.models")
 
 
+class BudgetExceededError(Exception):
+    """Raised when an agent has exceeded its monthly LLM budget cap."""
+
+    def __init__(self, agent_id: str, spent: float, limit: float) -> None:
+        self.agent_id = agent_id
+        self.spent = spent
+        self.limit = limit
+        super().__init__(
+            f"Agent {agent_id} budget exceeded: ${spent:.2f} spent of ${limit:.2f} limit"
+        )
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 

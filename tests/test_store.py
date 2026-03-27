@@ -14,6 +14,7 @@ _models = importlib.import_module("crazypumpkin.framework.models")
 _store_mod = importlib.import_module("crazypumpkin.framework.store")
 
 Agent = _models.Agent
+AgentConfig = _models.AgentConfig
 Approval = _models.Approval
 ApprovalStatus = _models.ApprovalStatus
 ChangeProposal = _models.ChangeProposal
@@ -258,3 +259,77 @@ class TestCompaction:
         for line in lines:
             data = json.loads(line)
             assert "archived_at" in data
+
+
+# ── Budget Cap ──────────────────────────────────────────────────────
+
+
+class TestBudgetCap:
+    def test_record_llm_spend_increments(self):
+        s = Store()
+        s.record_llm_spend("a1", 1.50)
+        s.record_llm_spend("a1", 2.25)
+        m = s.get_all_agent_metrics()[0]
+        assert abs(m.budget_spent_usd - 3.75) < 1e-9
+
+    def test_is_budget_exceeded_false_when_no_budget(self):
+        s = Store()
+        s.record_llm_spend("a1", 100.0)
+        cfg = AgentConfig(monthly_budget_usd=0.0)
+        assert s.is_budget_exceeded("a1", cfg) is False
+
+    def test_is_budget_exceeded_true_when_over(self):
+        s = Store()
+        s.record_llm_spend("a1", 10.0)
+        cfg = AgentConfig(monthly_budget_usd=5.0)
+        assert s.is_budget_exceeded("a1", cfg) is True
+
+    def test_is_budget_exceeded_true_when_equal(self):
+        s = Store()
+        s.record_llm_spend("a1", 5.0)
+        cfg = AgentConfig(monthly_budget_usd=5.0)
+        assert s.is_budget_exceeded("a1", cfg) is True
+
+    def test_is_budget_exceeded_false_when_under(self):
+        s = Store()
+        s.record_llm_spend("a1", 3.0)
+        cfg = AgentConfig(monthly_budget_usd=5.0)
+        assert s.is_budget_exceeded("a1", cfg) is False
+
+
+# ── Goal Ancestry ───────────────────────────────────────────────────
+
+
+class TestGoalAncestry:
+    def test_task_with_empty_goal_ancestry(self):
+        t = Task()
+        assert t.goal_ancestry == []
+
+    def test_goal_ancestry_roundtrip(self, tmp_path):
+        s = Store(data_dir=tmp_path)
+        t = Task(id="t1", goal_ancestry=["goal-root", "goal-child"])
+        s.add_task(t)
+        s.save()
+
+        s2 = Store(data_dir=tmp_path)
+        s2.load()
+        loaded = s2.get_task("t1")
+        assert loaded.goal_ancestry == ["goal-root", "goal-child"]
+
+    def test_goal_ancestry_missing_key_defaults_empty(self, tmp_path):
+        """Tasks saved without goal_ancestry key get an empty list on load."""
+        s = Store(data_dir=tmp_path)
+        t = Task(id="t1")
+        s.add_task(t)
+        s.save()
+
+        # Manually strip goal_ancestry from the saved JSON
+        path = tmp_path / "state.json"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        del raw["tasks"]["t1"]["goal_ancestry"]
+        path.write_text(json.dumps(raw), encoding="utf-8")
+
+        s2 = Store(data_dir=tmp_path)
+        s2.load()
+        loaded = s2.get_task("t1")
+        assert loaded.goal_ancestry == []
