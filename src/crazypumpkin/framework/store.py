@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from crazypumpkin.framework.models import (
-    Agent, AgentMetrics, Approval, ApprovalStatus, ChangeProposal, Project,
-    ProjectStatus, ProposalStatus, ProposalType, Review, ReviewDecision, Task,
-    TaskOutput, TaskStatus,
+    Agent, AgentConfig, AgentMetrics, Approval, ApprovalStatus, ChangeProposal,
+    Project, ProjectStatus, ProposalStatus, ProposalType, Review,
+    ReviewDecision, Task, TaskOutput, TaskStatus,
 )
 
 
@@ -135,6 +135,23 @@ class Store:
         if len(m.recent_outcomes) < window:
             return False
         return sum(m.recent_outcomes) / window < threshold
+
+    def record_llm_spend(self, agent_id: str, cost_usd: float) -> None:
+        """Increment budget_spent_usd for the given agent."""
+        m = self._agent_metrics.get(agent_id)
+        if m is None:
+            m = AgentMetrics(agent_id=agent_id)
+            self._agent_metrics[agent_id] = m
+        m.budget_spent_usd += cost_usd
+
+    def is_budget_exceeded(self, agent_id: str, config: AgentConfig) -> bool:
+        """Return True when the agent has exceeded its monthly budget cap."""
+        if config.monthly_budget_usd == 0.0:
+            return False
+        m = self._agent_metrics.get(agent_id)
+        if m is None:
+            return False
+        return m.budget_spent_usd >= config.monthly_budget_usd
 
     def get_all_agent_metrics(self) -> list[AgentMetrics]:
         return list(self._agent_metrics.values())
@@ -481,6 +498,7 @@ class Store:
             task.created_at = d.get("created_at", "")
             task.updated_at = d.get("updated_at", "")
             task.history = d.get("history", [])
+            task.goal_ancestry = d.get("goal_ancestry", [])
             task.blocked_by = d.get("blocked_by", "")
             self.tasks[k] = task
 
@@ -530,6 +548,7 @@ class Store:
                 total_retries=d.get("total_retries", 0),
                 total_duration_sec=d.get("total_duration_sec", 0.0),
                 first_attempt_accepted=d.get("first_attempt_accepted", 0),
+                budget_spent_usd=d.get("budget_spent_usd", 0.0),
                 recent_outcomes=d.get("recent_outcomes", []),
             )
 

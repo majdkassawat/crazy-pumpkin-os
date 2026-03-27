@@ -55,6 +55,7 @@ class AgentConfig:
     model: str = ""
     timeout_sec: int = 300
     max_retries: int = 1
+    monthly_budget_usd: float = 0.0  # 0.0 = no limit
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -122,6 +123,7 @@ class Task:
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
     history: list[dict[str, Any]] = field(default_factory=list)
+    goal_ancestry: list[str] = field(default_factory=list)
     blocked_by: str = ""  # blocker ID if task is held for a known blocker
 
     def can_transition(self, new_status: TaskStatus) -> bool:
@@ -287,4 +289,5 @@ class AgentMetrics:
     total_retries: int = 0
     total_duration_sec: float = 0.0
     first_attempt_accepted: int = 0
+    budget_spent_usd: float = 0.0
     recent_outcomes: list[bool] = field(default_factory=list)
