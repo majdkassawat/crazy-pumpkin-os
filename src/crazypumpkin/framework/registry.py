@@ -4,6 +4,7 @@ Agent registry — manages all agents and their roles.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from crazypumpkin.framework.agent import BaseAgent
@@ -11,6 +12,8 @@ from crazypumpkin.framework.models import Agent, AgentRole, AgentStatus
 
 if TYPE_CHECKING:
     from crazypumpkin.framework.store import Store
+
+logger = logging.getLogger("crazypumpkin.registry")
 
 
 class AgentRegistry:
@@ -47,6 +50,38 @@ class AgentRegistry:
     def purge_orphans(self, store: Store) -> dict[str, int]:
         """Remove stale agent data from *store* for IDs not in this registry."""
         return store.purge_orphaned_agents(self.active_ids())
+
+    def validate_store(self, store: Store) -> list[str]:
+        """Warn about unrecognized agent IDs in the store and purge them.
+
+        Call after ``store.load()`` and agent registration to clean up
+        orphaned entries left by prior pipeline runs.
+
+        Returns the list of orphaned agent IDs that were purged.
+        """
+        known = self.active_ids()
+        orphaned: list[str] = []
+
+        for aid in list(store._agent_metrics):
+            if aid not in known:
+                orphaned.append(aid)
+
+        for task in store.tasks.values():
+            if task.assigned_to and task.assigned_to not in known:
+                if task.assigned_to not in orphaned:
+                    orphaned.append(task.assigned_to)
+
+        for oid in orphaned:
+            logger.warning(
+                "Unrecognized agent ID '%s' found in store — no matching "
+                "agent definition; purging orphaned data",
+                oid,
+            )
+
+        if orphaned:
+            self.purge_orphans(store)
+
+        return orphaned
 
     @property
     def count(self) -> int:

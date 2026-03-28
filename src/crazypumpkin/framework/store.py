@@ -184,6 +184,7 @@ class Store:
                 orphan_ids.add(task.assigned_to)
         totals: dict[str, int] = {"metrics_removed": 0, "tasks_unassigned": 0}
         for oid in orphan_ids:
+            logger.warning("Orphaned agent ID '%s' not in active registry — purging", oid)
             counts = self.purge_agent(oid)
             totals["metrics_removed"] += counts["metrics_removed"]
             totals["tasks_unassigned"] += counts["tasks_unassigned"]
