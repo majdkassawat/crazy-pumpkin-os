@@ -220,6 +220,51 @@ class Store:
             "cycle_time_p50_hours": cycle_time_p50_hours,
         }
 
+    # ── Task completion helper ──
+
+    _FINISH_CHAIN: list[TaskStatus] = [
+        TaskStatus.CREATED,
+        TaskStatus.PLANNED,
+        TaskStatus.ASSIGNED,
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.SUBMITTED_FOR_REVIEW,
+        TaskStatus.APPROVED,
+        TaskStatus.COMPLETED,
+    ]
+
+    def finish_task(self, task: Task, reason: str = "") -> None:
+        """Walk *task* through the full completion chain to COMPLETED.
+
+        Starting from the task's current status, each remaining step in the
+        chain PLANNED → ASSIGNED → IN_PROGRESS → SUBMITTED_FOR_REVIEW →
+        APPROVED → COMPLETED is applied in order.  Every intermediate
+        transition is recorded in the task's history.
+
+        Raises ``ValueError`` if the task is already COMPLETED (no-op
+        semantics can mask bugs) or if any intermediate transition is not
+        allowed by the state machine.
+        """
+        if task.status == TaskStatus.COMPLETED:
+            return  # already done — no-op
+
+        # Determine where we enter the chain
+        try:
+            start_idx = self._FINISH_CHAIN.index(task.status) + 1
+        except ValueError:
+            # Current status is not in the happy-path chain at all
+            raise ValueError(
+                f"Cannot finish task {task.id}: current status "
+                f"{task.status.value!r} is not on the completion chain"
+            )
+
+        for target in self._FINISH_CHAIN[start_idx:]:
+            if not task.can_transition(target):
+                raise ValueError(
+                    f"Cannot transition task {task.id} from "
+                    f"{task.status.value!r} to {target.value!r} during finish_task"
+                )
+            task.transition(target, reason=reason or f"finish_task → {target.value}")
+
     # ── Compaction ──
 
     def compact(self, keep_recent: int = 50, task_retention_days: int = 7) -> dict[str, int]:

@@ -170,17 +170,7 @@ class Scheduler:
                 code_output = code_generator.execute(task, code_context)
                 task.output = code_output
                 # Walk the task through the full transition chain to COMPLETED
-                _completion_chain = [
-                    (TaskStatus.PLANNED, "Code generated"),
-                    (TaskStatus.ASSIGNED, "Auto-assigned for execution"),
-                    (TaskStatus.IN_PROGRESS, "Execution started"),
-                    (TaskStatus.SUBMITTED_FOR_REVIEW, "Code submitted for review"),
-                    (TaskStatus.APPROVED, "Auto-approved"),
-                    (TaskStatus.COMPLETED, "Execution completed successfully"),
-                ]
-                for target_status, reason in _completion_chain:
-                    if task.can_transition(target_status):
-                        task.transition(target_status, reason=reason)
+                store.finish_task(task, reason="Execution completed successfully")
                 tasks_processed += 1
 
         # 4. Persist run state

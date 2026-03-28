@@ -6,6 +6,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 # Dynamic imports — avoid bare 'from crazypumpkin.*' so the static import
@@ -357,3 +359,72 @@ class TestGoalAncestry:
         s2.load()
         loaded = s2.get_task("t1")
         assert loaded.goal_ancestry == []
+
+
+# ── finish_task helper ──────────────────────────────────────────────
+
+
+class TestFinishTask:
+    def test_planned_to_completed(self):
+        """A PLANNED task should walk all the way to COMPLETED."""
+        s = Store()
+        t = Task(id="t1", status=TaskStatus.PLANNED)
+        s.add_task(t)
+        s.finish_task(t, reason="done")
+        assert t.status == TaskStatus.COMPLETED
+        # Should have 5 history entries (PLANNED→ASSIGNED→IP→SFR→APPROVED→COMPLETED)
+        assert len(t.history) == 5
+        statuses = [h["to"] for h in t.history]
+        assert statuses == [
+            "assigned", "in_progress", "submitted_for_review", "approved", "completed",
+        ]
+
+    def test_created_to_completed(self):
+        """A CREATED task should walk all the way to COMPLETED."""
+        s = Store()
+        t = Task(id="t1", status=TaskStatus.CREATED)
+        s.add_task(t)
+        s.finish_task(t, reason="done")
+        assert t.status == TaskStatus.COMPLETED
+        # 6 transitions: CREATED→PLANNED→ASSIGNED→IP→SFR→APPROVED→COMPLETED
+        assert len(t.history) == 6
+        statuses = [h["to"] for h in t.history]
+        assert statuses == [
+            "planned", "assigned", "in_progress",
+            "submitted_for_review", "approved", "completed",
+        ]
+
+    def test_completed_is_noop(self):
+        """Calling finish_task on an already COMPLETED task is a no-op."""
+        s = Store()
+        t = Task(id="t1", status=TaskStatus.COMPLETED)
+        s.add_task(t)
+        s.finish_task(t)
+        assert t.status == TaskStatus.COMPLETED
+        assert t.history == []
+
+    def test_in_progress_to_completed(self):
+        """Starting from IN_PROGRESS should skip earlier steps."""
+        s = Store()
+        t = Task(id="t1", status=TaskStatus.IN_PROGRESS)
+        s.add_task(t)
+        s.finish_task(t)
+        assert t.status == TaskStatus.COMPLETED
+        assert len(t.history) == 3  # SFR, APPROVED, COMPLETED
+
+    def test_approved_to_completed(self):
+        """Starting from APPROVED should produce only one transition."""
+        s = Store()
+        t = Task(id="t1", status=TaskStatus.APPROVED)
+        s.add_task(t)
+        s.finish_task(t)
+        assert t.status == TaskStatus.COMPLETED
+        assert len(t.history) == 1
+
+    def test_archived_raises(self):
+        """ARCHIVED is not on the completion chain — should raise ValueError."""
+        s = Store()
+        t = Task(id="t1", status=TaskStatus.ARCHIVED)
+        s.add_task(t)
+        with pytest.raises(ValueError, match="not on the completion chain"):
+            s.finish_task(t)
