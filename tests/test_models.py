@@ -219,6 +219,56 @@ class TestTask:
         assert t.history[0]["to"] == "planned"
         assert t.history[0]["reason"] == "ready"
 
+    def test_in_progress_to_archived(self):
+        t = Task(status=TaskStatus.IN_PROGRESS)
+        assert t.can_transition(TaskStatus.ARCHIVED) is True
+        t.transition(TaskStatus.ARCHIVED, reason="retired from active queue")
+        assert t.status == TaskStatus.ARCHIVED
+        assert t.history[-1]["from"] == "in_progress"
+        assert t.history[-1]["to"] == "archived"
+
+    def test_in_progress_to_archived_history(self):
+        """Transition from in_progress to archived records full history chain."""
+        t = Task(status=TaskStatus.IN_PROGRESS)
+        t.transition(TaskStatus.ARCHIVED, reason="no longer needed")
+        assert t.status == TaskStatus.ARCHIVED
+        assert len(t.history) == 1
+        entry = t.history[0]
+        assert entry["from"] == "in_progress"
+        assert entry["to"] == "archived"
+        assert entry["reason"] == "no longer needed"
+        assert "timestamp" in entry
+
+    def test_in_progress_invalid_transitions_raise(self):
+        """Statuses NOT in the in_progress allow-set must raise ValueError."""
+        invalid_targets = [
+            TaskStatus.CREATED,
+            TaskStatus.ASSIGNED,
+            TaskStatus.APPROVED,
+            TaskStatus.REJECTED,
+            TaskStatus.COMPLETED,
+            TaskStatus.IN_PROGRESS,
+        ]
+        for target in invalid_targets:
+            t = Task(status=TaskStatus.IN_PROGRESS)
+            assert t.can_transition(target) is False, f"should not allow in_progress -> {target.value}"
+            with pytest.raises(ValueError, match="Cannot transition"):
+                t.transition(target)
+
+    def test_in_progress_valid_targets(self):
+        """All valid targets from in_progress should succeed."""
+        valid_targets = [
+            TaskStatus.SUBMITTED_FOR_REVIEW,
+            TaskStatus.ESCALATED,
+            TaskStatus.PLANNED,
+            TaskStatus.ARCHIVED,
+        ]
+        for target in valid_targets:
+            t = Task(status=TaskStatus.IN_PROGRESS)
+            assert t.can_transition(target) is True
+            t.transition(target, reason="test")
+            assert t.status == target
+
     def test_transition_invalid_raises(self):
         t = Task(status=TaskStatus.CREATED)
         with pytest.raises(ValueError, match="Cannot transition"):
