@@ -1,0 +1,23 @@
+# Crazy Pumpkin OS — Code Ownership
+#
+# Tier 1 (contributor-friendly, auto-approve eligible):
+# Documentation, tests, examples, plugins
+/docs/                    @majdkassawat
+/examples/                @majdkassawat
+/tests/                   @majdkassawat
+*.md                      @majdkassawat
+LICENSE*                  @majdkassawat
+
+# Tier 2 (discussion required):
+# Agent logic, framework core, scheduler
+/src/crazypumpkin/agents/           @majdkassawat
+/src/crazypumpkin/framework/        @majdkassawat
+/src/crazypumpkin/scheduler/        @majdkassawat
+/src/crazypumpkin/llm/              @majdkassawat
+/src/crazypumpkin/cli.py            @majdkassawat
+
+# Tier 3 (founder only):
+# CI/CD, security, governance
+/.github/                 @majdkassawat
+/CODEOWNERS               @majdkassawat
+pyproject.toml            @majdkassawat
