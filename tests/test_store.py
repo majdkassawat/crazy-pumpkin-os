@@ -357,3 +357,55 @@ class TestGoalAncestry:
         s2.load()
         loaded = s2.get_task("t1")
         assert loaded.goal_ancestry == []
+
+
+# ── PR Sync / Logger regression ────────────────────────────────────
+
+
+class TestPRSyncLoggerRegression:
+    """Regression tests for the logger NameError fix.
+
+    The module-level ``logger`` was previously defined with a hardcoded
+    string name.  A pull_request sync code path triggered a NameError
+    because the logger was referenced before being properly resolved.
+    These tests exercise every code path that calls ``logger.*`` to
+    ensure no NameError is raised.
+    """
+
+    def test_compact_logger_no_name_error(self, tmp_path):
+        """compact() calls logger.info — must not raise NameError."""
+        s = Store(data_dir=tmp_path)
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+
+        s.add_project(Project(
+            id="p1", status=ProjectStatus.COMPLETED, created_at=old_ts,
+        ))
+        s.add_project(Project(
+            id="p2", status=ProjectStatus.COMPLETED, created_at=old_ts,
+        ))
+        s.add_project(Project(
+            id="p3", status=ProjectStatus.COMPLETED, created_at=old_ts,
+        ))
+
+        # This triggers the logger.info path inside compact()
+        counts = s.compact(keep_recent=1)
+        assert counts.get("projects", 0) == 2
+
+    def test_save_error_path_logger_no_name_error(self, tmp_path, monkeypatch):
+        """save() catches exceptions and calls logger.error — must not raise NameError."""
+        s = Store(data_dir=tmp_path)
+        s.add_project(Project(id="p1"))
+
+        # Force json.dumps to fail so the except branch (logger.error) runs
+        monkeypatch.setattr(
+            _store_mod, "json",
+            type("FakeJson", (), {
+                "dumps": staticmethod(lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom"))),
+            })(),
+        )
+        # Must not raise NameError — the logger.error call should work fine
+        s.save()
+
+    def test_store_logger_uses_dunder_name(self):
+        """Verify the module logger uses __name__ (the fix under test)."""
+        assert _store_mod.logger.name == "crazypumpkin.framework.store"
