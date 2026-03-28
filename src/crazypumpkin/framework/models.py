@@ -6,6 +6,7 @@ All models are dataclasses — no external dependencies.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -34,6 +35,15 @@ def _now() -> str:
 
 def _uid() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def deterministic_id(name: str) -> str:
+    """Generate a stable 12-char hex ID from an agent name.
+
+    Using a deterministic ID ensures the same agent keeps the same ID
+    across pipeline restarts, preventing orphaned task assignments.
+    """
+    return hashlib.sha256(name.encode()).hexdigest()[:12]
 
 
 # ── Agent ────────────────────────────────────────────────────────────

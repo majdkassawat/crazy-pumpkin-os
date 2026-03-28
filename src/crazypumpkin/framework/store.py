@@ -156,6 +156,44 @@ class Store:
     def get_all_agent_metrics(self) -> list[AgentMetrics]:
         return list(self._agent_metrics.values())
 
+    def purge_agent(self, agent_id: str) -> dict[str, int]:
+        """Remove an agent's metrics and unassign its orphaned tasks.
+
+        Returns counts of purged metrics and unassigned tasks.
+        """
+        counts: dict[str, int] = {"metrics_removed": 0, "tasks_unassigned": 0}
+        if agent_id in self._agent_metrics:
+            del self._agent_metrics[agent_id]
+            counts["metrics_removed"] = 1
+        for task in self.tasks.values():
+            if task.assigned_to == agent_id:
+                task.assigned_to = ""
+                counts["tasks_unassigned"] += 1
+        return counts
+
+    def purge_orphaned_agents(self, active_ids: set[str]) -> dict[str, int]:
+        """Remove metrics and unassign tasks for agent IDs not in *active_ids*.
+
+        Call this after re-registering all agents on startup to clean up
+        stale references from prior pipeline runs.
+        """
+        orphan_ids = set(self._agent_metrics.keys()) - active_ids
+        # Also check task assignments
+        for task in self.tasks.values():
+            if task.assigned_to and task.assigned_to not in active_ids:
+                orphan_ids.add(task.assigned_to)
+        totals: dict[str, int] = {"metrics_removed": 0, "tasks_unassigned": 0}
+        for oid in orphan_ids:
+            counts = self.purge_agent(oid)
+            totals["metrics_removed"] += counts["metrics_removed"]
+            totals["tasks_unassigned"] += counts["tasks_unassigned"]
+        if totals["metrics_removed"] or totals["tasks_unassigned"]:
+            logger.info(
+                "Purged orphaned agents: %s",
+                ", ".join(f"{k}={v}" for k, v in totals.items() if v > 0),
+            )
+        return totals
+
     def compute_digest_stats(self, window_hours: int = 24) -> dict:
         from datetime import datetime, timezone, timedelta
 

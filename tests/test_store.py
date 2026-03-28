@@ -357,3 +357,80 @@ class TestGoalAncestry:
         s2.load()
         loaded = s2.get_task("t1")
         assert loaded.goal_ancestry == []
+
+
+# ── Orphan Purge ───────────────────────────────────────────────────
+
+
+class TestPurgeAgent:
+    def test_purge_removes_metrics(self):
+        s = Store()
+        s.record_task_outcome("stale1", "old-agent", completed=True,
+                              retries=0, duration_sec=1.0, first_attempt=True)
+        counts = s.purge_agent("stale1")
+        assert counts["metrics_removed"] == 1
+        assert len(s.get_all_agent_metrics()) == 0
+
+    def test_purge_unassigns_tasks(self):
+        s = Store()
+        s.add_task(Task(id="t1", assigned_to="stale1"))
+        s.add_task(Task(id="t2", assigned_to="active1"))
+        counts = s.purge_agent("stale1")
+        assert counts["tasks_unassigned"] == 1
+        assert s.get_task("t1").assigned_to == ""
+        assert s.get_task("t2").assigned_to == "active1"
+
+    def test_purge_nonexistent_agent(self):
+        s = Store()
+        counts = s.purge_agent("doesnotexist")
+        assert counts["metrics_removed"] == 0
+        assert counts["tasks_unassigned"] == 0
+
+
+class TestPurgeOrphanedAgents:
+    def test_purges_stale_metrics_and_tasks(self):
+        s = Store()
+        s.record_task_outcome("active1", "Agent A", completed=True,
+                              retries=0, duration_sec=1.0, first_attempt=True)
+        s.record_task_outcome("stale1", "Agent B", completed=False,
+                              retries=1, duration_sec=2.0, first_attempt=False)
+        s.add_task(Task(id="t1", assigned_to="stale1"))
+        s.add_task(Task(id="t2", assigned_to="active1"))
+
+        totals = s.purge_orphaned_agents(active_ids={"active1"})
+        assert totals["metrics_removed"] == 1
+        assert totals["tasks_unassigned"] == 1
+        assert s.get_task("t1").assigned_to == ""
+        assert s.get_task("t2").assigned_to == "active1"
+        # Only active agent metrics remain
+        metrics = s.get_all_agent_metrics()
+        assert len(metrics) == 1
+        assert metrics[0].agent_id == "active1"
+
+    def test_no_orphans_returns_zeros(self):
+        s = Store()
+        s.record_task_outcome("a1", "Agent", completed=True,
+                              retries=0, duration_sec=1.0, first_attempt=True)
+        totals = s.purge_orphaned_agents(active_ids={"a1"})
+        assert totals["metrics_removed"] == 0
+        assert totals["tasks_unassigned"] == 0
+
+    def test_catches_orphaned_task_assignments_without_metrics(self):
+        s = Store()
+        s.add_task(Task(id="t1", assigned_to="phantom123"))
+        totals = s.purge_orphaned_agents(active_ids={"active1"})
+        assert totals["tasks_unassigned"] == 1
+        assert s.get_task("t1").assigned_to == ""
+
+    def test_purge_persists_after_save_load(self, tmp_path):
+        s = Store(data_dir=tmp_path)
+        s.record_task_outcome("stale1", "Stale", completed=True,
+                              retries=0, duration_sec=1.0, first_attempt=True)
+        s.add_task(Task(id="t1", assigned_to="stale1", status=TaskStatus.PLANNED))
+        s.purge_orphaned_agents(active_ids={"active1"})
+        s.save()
+
+        s2 = Store(data_dir=tmp_path)
+        s2.load()
+        assert len(s2.get_all_agent_metrics()) == 0
+        assert s2.get_task("t1").assigned_to == ""

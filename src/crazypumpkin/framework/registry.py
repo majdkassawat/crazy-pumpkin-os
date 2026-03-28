@@ -4,8 +4,13 @@ Agent registry — manages all agents and their roles.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from crazypumpkin.framework.agent import BaseAgent
 from crazypumpkin.framework.models import Agent, AgentRole, AgentStatus
+
+if TYPE_CHECKING:
+    from crazypumpkin.framework.store import Store
 
 
 class AgentRegistry:
@@ -34,6 +39,14 @@ class AgentRegistry:
 
     def all_active(self) -> list[BaseAgent]:
         return [a for a in self._agents.values() if a.agent.status == AgentStatus.ACTIVE]
+
+    def active_ids(self) -> set[str]:
+        """Return the set of all registered agent IDs."""
+        return set(self._agents.keys())
+
+    def purge_orphans(self, store: Store) -> dict[str, int]:
+        """Remove stale agent data from *store* for IDs not in this registry."""
+        return store.purge_orphaned_agents(self.active_ids())
 
     @property
     def count(self) -> int:
