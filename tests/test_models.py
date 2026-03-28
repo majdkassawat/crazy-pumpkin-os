@@ -17,6 +17,7 @@ AgentConfig = _models.AgentConfig
 AgentMetrics = _models.AgentMetrics
 AgentRole = _models.AgentRole
 AgentStatus = _models.AgentStatus
+deterministic_id = _models.deterministic_id
 Approval = _models.Approval
 ApprovalStatus = _models.ApprovalStatus
 AuditEvent = _models.AuditEvent
@@ -302,3 +303,26 @@ class TestAgentMetrics:
         assert m.first_attempt_accepted == 0
         assert m.budget_spent_usd == 0.0
         assert m.recent_outcomes == []
+
+
+# ── Deterministic ID ────────────────────────────────────────────────
+
+
+class TestDeterministicId:
+    def test_length_is_12(self):
+        assert len(deterministic_id("Bolt - Developer")) == 12
+
+    def test_hex_chars_only(self):
+        rid = deterministic_id("Bolt - Developer")
+        assert all(c in "0123456789abcdef" for c in rid)
+
+    def test_stable_across_calls(self):
+        assert deterministic_id("Bolt - Developer") == deterministic_id("Bolt - Developer")
+
+    def test_different_names_produce_different_ids(self):
+        assert deterministic_id("Bolt - Developer") != deterministic_id("Atlas - Architect")
+
+    def test_agent_with_deterministic_id(self):
+        a = Agent(id=deterministic_id("Bolt - Developer"), name="Bolt - Developer")
+        assert a.id == deterministic_id("Bolt - Developer")
+        assert len(a.id) == 12

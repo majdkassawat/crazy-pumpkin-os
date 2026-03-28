@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import logging
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 # validator does not flag them as unresolvable when the package is not installed.
 _models = importlib.import_module("crazypumpkin.framework.models")
 _store_mod = importlib.import_module("crazypumpkin.framework.store")
+_registry_mod = importlib.import_module("crazypumpkin.framework.registry")
+_agent_mod = importlib.import_module("crazypumpkin.framework.agent")
 
 Agent = _models.Agent
 AgentConfig = _models.AgentConfig
@@ -29,6 +32,8 @@ TaskOutput = _models.TaskOutput
 TaskStatus = _models.TaskStatus
 
 Store = _store_mod.Store
+AgentRegistry = _registry_mod.AgentRegistry
+BaseAgent = _agent_mod.BaseAgent
 
 
 # ── Basic CRUD ───────────────────────────────────────────────────────
@@ -357,3 +362,164 @@ class TestGoalAncestry:
         s2.load()
         loaded = s2.get_task("t1")
         assert loaded.goal_ancestry == []
+
+
+# ── Orphan Purge ───────────────────────────────────────────────────
+
+
+class TestPurgeAgent:
+    def test_purge_removes_metrics(self):
+        s = Store()
+        s.record_task_outcome("stale1", "old-agent", completed=True,
+                              retries=0, duration_sec=1.0, first_attempt=True)
+        counts = s.purge_agent("stale1")
+        assert counts["metrics_removed"] == 1
+        assert len(s.get_all_agent_metrics()) == 0
+
+    def test_purge_unassigns_tasks(self):
+        s = Store()
+        s.add_task(Task(id="t1", assigned_to="stale1"))
+        s.add_task(Task(id="t2", assigned_to="active1"))
+        counts = s.purge_agent("stale1")
+        assert counts["tasks_unassigned"] == 1
+        assert s.get_task("t1").assigned_to == ""
+        assert s.get_task("t2").assigned_to == "active1"
+
+    def test_purge_nonexistent_agent(self):
+        s = Store()
+        counts = s.purge_agent("doesnotexist")
+        assert counts["metrics_removed"] == 0
+        assert counts["tasks_unassigned"] == 0
+
+
+class TestPurgeOrphanedAgents:
+    def test_purges_stale_metrics_and_tasks(self):
+        s = Store()
+        s.record_task_outcome("active1", "Agent A", completed=True,
+                              retries=0, duration_sec=1.0, first_attempt=True)
+        s.record_task_outcome("stale1", "Agent B", completed=False,
+                              retries=1, duration_sec=2.0, first_attempt=False)
+        s.add_task(Task(id="t1", assigned_to="stale1"))
+        s.add_task(Task(id="t2", assigned_to="active1"))
+
+        totals = s.purge_orphaned_agents(active_ids={"active1"})
+        assert totals["metrics_removed"] == 1
+        assert totals["tasks_unassigned"] == 1
+        assert s.get_task("t1").assigned_to == ""
+        assert s.get_task("t2").assigned_to == "active1"
+        # Only active agent metrics remain
+        metrics = s.get_all_agent_metrics()
+        assert len(metrics) == 1
+        assert metrics[0].agent_id == "active1"
+
+    def test_no_orphans_returns_zeros(self):
+        s = Store()
+        s.record_task_outcome("a1", "Agent", completed=True,
+                              retries=0, duration_sec=1.0, first_attempt=True)
+        totals = s.purge_orphaned_agents(active_ids={"a1"})
+        assert totals["metrics_removed"] == 0
+        assert totals["tasks_unassigned"] == 0
+
+    def test_catches_orphaned_task_assignments_without_metrics(self):
+        s = Store()
+        s.add_task(Task(id="t1", assigned_to="phantom123"))
+        totals = s.purge_orphaned_agents(active_ids={"active1"})
+        assert totals["tasks_unassigned"] == 1
+        assert s.get_task("t1").assigned_to == ""
+
+    def test_purge_persists_after_save_load(self, tmp_path):
+        s = Store(data_dir=tmp_path)
+        s.record_task_outcome("stale1", "Stale", completed=True,
+                              retries=0, duration_sec=1.0, first_attempt=True)
+        s.add_task(Task(id="t1", assigned_to="stale1", status=TaskStatus.PLANNED))
+        s.purge_orphaned_agents(active_ids={"active1"})
+        s.save()
+
+        s2 = Store(data_dir=tmp_path)
+        s2.load()
+        assert len(s2.get_all_agent_metrics()) == 0
+        assert s2.get_task("t1").assigned_to == ""
+
+    def test_purge_logs_individual_orphaned_ids(self, caplog):
+        s = Store()
+        s.record_task_outcome("orphan1", "Ghost A", completed=True,
+                              retries=0, duration_sec=1.0, first_attempt=True)
+        s.record_task_outcome("orphan2", "Ghost B", completed=False,
+                              retries=1, duration_sec=2.0, first_attempt=False)
+        with caplog.at_level(logging.WARNING, logger="crazypumpkin.store"):
+            s.purge_orphaned_agents(active_ids={"active1"})
+        assert "orphan1" in caplog.text
+        assert "orphan2" in caplog.text
+
+
+# ── Registry validate_store ────────────────────────────────────────
+
+
+class _DummyAgent(BaseAgent):
+    """Minimal concrete agent for registry tests."""
+    def execute(self, task, context):
+        from crazypumpkin.framework.models import TaskOutput
+        return TaskOutput()
+
+
+class TestValidateStore:
+    def _make_registry_with(self, *names):
+        reg = AgentRegistry()
+        for name in names:
+            agent_model = Agent(id=name, name=name)
+            reg.register(_DummyAgent(agent_model))
+        return reg
+
+    def test_warns_and_purges_orphaned_metrics(self, caplog):
+        s = Store()
+        s.record_task_outcome("active1", "Good Agent", completed=True,
+                              retries=0, duration_sec=1.0, first_attempt=True)
+        s.record_task_outcome("d136d1fce88b", "Phantom", completed=False,
+                              retries=1, duration_sec=2.0, first_attempt=False)
+        reg = self._make_registry_with("active1")
+
+        with caplog.at_level(logging.WARNING, logger="crazypumpkin.registry"):
+            orphaned = reg.validate_store(s)
+
+        assert "d136d1fce88b" in orphaned
+        assert "d136d1fce88b" in caplog.text
+        assert len(s.get_all_agent_metrics()) == 1
+        assert s.get_all_agent_metrics()[0].agent_id == "active1"
+
+    def test_warns_and_purges_orphaned_task_assignments(self, caplog):
+        s = Store()
+        s.add_task(Task(id="t1", assigned_to="d136d1fce88b"))
+        s.add_task(Task(id="t2", assigned_to="active1"))
+        reg = self._make_registry_with("active1")
+
+        with caplog.at_level(logging.WARNING, logger="crazypumpkin.registry"):
+            orphaned = reg.validate_store(s)
+
+        assert "d136d1fce88b" in orphaned
+        assert s.get_task("t1").assigned_to == ""
+        assert s.get_task("t2").assigned_to == "active1"
+
+    def test_no_orphans_returns_empty(self):
+        s = Store()
+        s.record_task_outcome("a1", "Agent A", completed=True,
+                              retries=0, duration_sec=1.0, first_attempt=True)
+        reg = self._make_registry_with("a1")
+        orphaned = reg.validate_store(s)
+        assert orphaned == []
+
+    def test_validate_store_after_load(self, tmp_path):
+        s = Store(data_dir=tmp_path)
+        s.record_task_outcome("stale_id", "Stale", completed=True,
+                              retries=0, duration_sec=1.0, first_attempt=True)
+        s.add_task(Task(id="t1", assigned_to="stale_id"))
+        s.save()
+
+        s2 = Store(data_dir=tmp_path)
+        s2.load()
+
+        reg = self._make_registry_with("live_agent")
+        orphaned = reg.validate_store(s2)
+
+        assert "stale_id" in orphaned
+        assert s2.get_task("t1").assigned_to == ""
+        assert len(s2.get_all_agent_metrics()) == 0
