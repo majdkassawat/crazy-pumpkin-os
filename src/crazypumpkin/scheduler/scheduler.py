@@ -169,8 +169,18 @@ class Scheduler:
                 code_context: dict[str, Any] = {"workspace": str(workspace)}
                 code_output = code_generator.execute(task, code_context)
                 task.output = code_output
-                if task.can_transition(TaskStatus.PLANNED):
-                    task.transition(TaskStatus.PLANNED, reason="Code generated")
+                # Walk the task through the full transition chain to COMPLETED
+                _completion_chain = [
+                    (TaskStatus.PLANNED, "Code generated"),
+                    (TaskStatus.ASSIGNED, "Auto-assigned for execution"),
+                    (TaskStatus.IN_PROGRESS, "Execution started"),
+                    (TaskStatus.SUBMITTED_FOR_REVIEW, "Code submitted for review"),
+                    (TaskStatus.APPROVED, "Auto-approved"),
+                    (TaskStatus.COMPLETED, "Execution completed successfully"),
+                ]
+                for target_status, reason in _completion_chain:
+                    if task.can_transition(target_status):
+                        task.transition(target_status, reason=reason)
                 tasks_processed += 1
 
         # 4. Persist run state
