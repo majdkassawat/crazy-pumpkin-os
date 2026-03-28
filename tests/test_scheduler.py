@@ -370,3 +370,122 @@ class TestCliRunOnce:
         args = parser.parse_args(["run", "--once"])
         assert args.once is True
         assert args.command == "run"
+
+
+# ---------------------------------------------------------------------------
+# Tests — post-execution task completion status
+# ---------------------------------------------------------------------------
+
+
+class TestPostExecutionTaskStatus:
+    """Verify that tasks reach COMPLETED (not ARCHIVED) after successful execution."""
+
+    @mock.patch("crazypumpkin.agents.code_generator.safe_write_text")
+    @mock.patch("crazypumpkin.llm.registry.ProviderRegistry.call")
+    @mock.patch("crazypumpkin.llm.registry.ProviderRegistry.call_json")
+    def test_task_reaches_completed_after_code_generation(
+        self, mock_call_json, mock_call, mock_write, tmp_path
+    ):
+        """After successful code generation, task status is COMPLETED."""
+        workspace = tmp_path / "products" / "myapp"
+        data_dir = workspace / "data"
+        _seed_store_with_goal(data_dir, project_id="proj1")
+
+        mock_call_json.return_value = {
+            "tasks": [
+                {
+                    "title": "Add numbers",
+                    "description": "Implement add function",
+                    "priority": 1,
+                    "acceptance_criteria": ["adds two ints"],
+                    "depends_on": [],
+                }
+            ]
+        }
+        mock_call.return_value = (
+            "```calculator.py\ndef add(a, b):\n    return a + b\n```\n"
+        )
+
+        config = _make_config(
+            products=[{"name": "MyApp", "workspace": str(workspace)}]
+        )
+        scheduler = Scheduler(config)
+        results = scheduler.run_once()
+
+        assert "MyApp" in results
+        assert "error" not in results["MyApp"]
+        assert results["MyApp"]["tasks_processed"] >= 1
+
+        # Reload store and check that developer tasks reached COMPLETED
+        from crazypumpkin.framework.store import Store
+
+        store = Store(data_dir=data_dir)
+        store.load()
+        completed_tasks = [
+            t for t in store.tasks.values()
+            if t.status == TaskStatus.COMPLETED
+        ]
+        assert len(completed_tasks) >= 1, (
+            "At least one task must reach COMPLETED after successful execution"
+        )
+
+    @mock.patch("crazypumpkin.agents.code_generator.safe_write_text")
+    @mock.patch("crazypumpkin.llm.registry.ProviderRegistry.call")
+    @mock.patch("crazypumpkin.llm.registry.ProviderRegistry.call_json")
+    def test_no_archived_status_in_history_on_happy_path(
+        self, mock_call_json, mock_call, mock_write, tmp_path
+    ):
+        """On the happy path, no task history entry has 'to: archived'."""
+        workspace = tmp_path / "products" / "myapp"
+        data_dir = workspace / "data"
+        _seed_store_with_goal(data_dir, project_id="proj1")
+
+        mock_call_json.return_value = {
+            "tasks": [
+                {
+                    "title": "Add numbers",
+                    "description": "Implement add",
+                    "priority": 1,
+                    "acceptance_criteria": ["adds"],
+                    "depends_on": [],
+                }
+            ]
+        }
+        mock_call.return_value = (
+            "```calculator.py\ndef add(a, b):\n    return a + b\n```\n"
+        )
+
+        config = _make_config(
+            products=[{"name": "MyApp", "workspace": str(workspace)}]
+        )
+        scheduler = Scheduler(config)
+        scheduler.run_once()
+
+        from crazypumpkin.framework.store import Store
+
+        store = Store(data_dir=data_dir)
+        store.load()
+
+        for task in store.tasks.values():
+            for entry in task.history:
+                assert entry.get("to") != "archived", (
+                    f"Task {task.id!r} has unexpected 'to: archived' in history: {entry}"
+                )
+
+    def test_transition_from_in_progress_to_archived_blocked(self):
+        """TASK_TRANSITIONS blocks IN_PROGRESS → ARCHIVED; ValueError is raised."""
+        from crazypumpkin.framework.models import TASK_TRANSITIONS
+
+        task = Task(
+            title="Test task",
+            status=TaskStatus.IN_PROGRESS,
+        )
+
+        # Confirm transition table does not allow it
+        assert TaskStatus.ARCHIVED not in TASK_TRANSITIONS[TaskStatus.IN_PROGRESS], (
+            "TASK_TRANSITIONS must not allow IN_PROGRESS → ARCHIVED"
+        )
+        assert not task.can_transition(TaskStatus.ARCHIVED)
+
+        with pytest.raises(ValueError, match="Cannot transition"):
+            task.transition(TaskStatus.ARCHIVED)
