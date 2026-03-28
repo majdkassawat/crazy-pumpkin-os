@@ -143,6 +143,7 @@ class TestAgentConfig:
         assert cfg.model == ""
         assert cfg.timeout_sec == 300
         assert cfg.max_retries == 1
+        assert cfg.monthly_budget_usd == 0.0
         assert cfg.extra == {}
 
     def test_custom(self):
@@ -150,6 +151,10 @@ class TestAgentConfig:
         assert cfg.model == "gpt-4"
         assert cfg.timeout_sec == 60
         assert cfg.max_retries == 5
+
+    def test_monthly_budget_usd_custom(self):
+        cfg = AgentConfig(monthly_budget_usd=25.0)
+        assert cfg.monthly_budget_usd == 25.0
 
 
 class TestAgent:
@@ -295,4 +300,5 @@ class TestAgentMetrics:
         assert m.total_retries == 0
         assert m.total_duration_sec == 0.0
         assert m.first_attempt_accepted == 0
+        assert m.budget_spent_usd == 0.0
         assert m.recent_outcomes == []

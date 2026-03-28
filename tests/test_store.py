@@ -296,6 +296,30 @@ class TestBudgetCap:
         cfg = AgentConfig(monthly_budget_usd=5.0)
         assert s.is_budget_exceeded("a1", cfg) is False
 
+    def test_is_budget_exceeded_false_when_no_metrics(self):
+        s = Store()
+        cfg = AgentConfig(monthly_budget_usd=5.0)
+        assert s.is_budget_exceeded("unknown", cfg) is False
+
+    def test_record_llm_spend_creates_entry_if_absent(self):
+        s = Store()
+        s.record_llm_spend("new_agent", 7.5)
+        metrics = s.get_all_agent_metrics()
+        assert len(metrics) == 1
+        assert metrics[0].agent_id == "new_agent"
+        assert abs(metrics[0].budget_spent_usd - 7.5) < 1e-9
+
+    def test_budget_spent_usd_roundtrip(self, tmp_path):
+        s = Store(data_dir=tmp_path)
+        s.record_llm_spend("a1", 12.34)
+        s.save()
+
+        s2 = Store(data_dir=tmp_path)
+        s2.load()
+        metrics = s2.get_all_agent_metrics()
+        assert len(metrics) == 1
+        assert abs(metrics[0].budget_spent_usd - 12.34) < 1e-9
+
 
 # ── Goal Ancestry ───────────────────────────────────────────────────
 
