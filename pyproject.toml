@@ -7,7 +7,7 @@ name = "crazypumpkin"
 version = "0.1.0"
 description = "Autonomous AI Company OS — install, configure, and run your own AI-powered software company"
 readme = "README.md"
-license = "Apache-2.0"
+license = "MIT"
 requires-python = ">=3.11"
 authors = [
     {name = "Majd Kassawat"},
@@ -16,7 +16,7 @@ keywords = ["ai", "agents", "autonomous", "company", "framework", "multi-agent"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
