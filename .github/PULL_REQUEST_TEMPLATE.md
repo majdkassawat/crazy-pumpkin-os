@@ -21,3 +21,4 @@ Closes #<!-- issue number -->
 - [ ] No new warnings introduced
 - [ ] I agree that my contribution is licensed under MIT
 - [ ] Changes follow the project's code style and conventions
+- [ ] Any specification artifacts follow [Open Spec](https://github.com/open-spec/open-spec) format

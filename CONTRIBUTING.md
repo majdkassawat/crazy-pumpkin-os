@@ -105,10 +105,14 @@ pytest -k "test_config" -v
 
 ---
 
+## Open Spec
+
+This project uses the [Open Spec](https://github.com/open-spec/open-spec) specification format for design documents and specifications. When contributing specifications or architectural proposals, follow the Open Spec format. See the linked documentation for details.
+
 ## Code of Conduct
 
 All contributors are expected to follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the [Apache-2.0 License](LICENSE).
+By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE). See [LICENSE.md](LICENSE.md) for the full licensing model.

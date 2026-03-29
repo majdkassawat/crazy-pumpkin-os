@@ -27,4 +27,7 @@ Rules:
 - Do not refactor surrounding code
 - Include a test that would have caught this bug
 - Follow existing code style and patterns
+- Follow [Open Spec](https://github.com/open-spec/open-spec) format for any specification artifacts
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and approval tiers.
