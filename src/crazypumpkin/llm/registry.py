@@ -46,6 +46,13 @@ try:
 except ImportError:
     pass
 
+try:
+    from crazypumpkin.llm.litellm_provider import LiteLLMProvider
+
+    PROVIDER_CLASSES["litellm"] = LiteLLMProvider
+except ImportError:
+    pass
+
 
 class ProviderRegistry:
     """Routes LLM calls to the correct provider/model based on config.
