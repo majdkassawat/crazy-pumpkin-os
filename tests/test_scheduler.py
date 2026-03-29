@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -376,3 +377,110 @@ class TestCliRunOnce:
         args = parser.parse_args(["run", "--once"])
         assert args.once is True
         assert args.command == "run"
+
+
+# ---------------------------------------------------------------------------
+# Tests — per-agent cooldown tracking
+# ---------------------------------------------------------------------------
+
+
+class TestAgentCooldown:
+    """Tests for agent_last_dispatch persistence and _is_agent_on_cooldown."""
+
+    def test_load_state_populates_agent_last_dispatch(self, tmp_path):
+        """load_state reads agent_last_dispatch from the JSON file."""
+        ts = "2026-01-15T12:00:00+00:00"
+        state = {
+            "last_run": ts,
+            "cycle_count": 5,
+            "agent_last_dispatch": {"StrategyAgent": ts},
+        }
+        (tmp_path / _STATE_FILENAME).write_text(json.dumps(state), encoding="utf-8")
+
+        scheduler = Scheduler(_make_config())
+        scheduler.load_state(tmp_path)
+
+        assert scheduler.agent_last_dispatch == {"StrategyAgent": ts}
+
+    def test_load_state_defaults_to_empty_dict(self, tmp_path):
+        """load_state defaults agent_last_dispatch to {} when key is absent."""
+        state = {"last_run": None, "cycle_count": 0}
+        (tmp_path / _STATE_FILENAME).write_text(json.dumps(state), encoding="utf-8")
+
+        scheduler = Scheduler(_make_config())
+        scheduler.load_state(tmp_path)
+
+        assert scheduler.agent_last_dispatch == {}
+
+    def test_load_state_defaults_when_no_file(self, tmp_path):
+        """load_state defaults agent_last_dispatch to {} when file is missing."""
+        scheduler = Scheduler(_make_config())
+        scheduler.load_state(tmp_path)
+
+        assert scheduler.agent_last_dispatch == {}
+
+    def test_save_state_writes_agent_last_dispatch(self, tmp_path):
+        """save_state persists agent_last_dispatch to the JSON file."""
+        scheduler = Scheduler(_make_config())
+        scheduler.agent_last_dispatch = {"TestAgent": "2026-01-15T12:00:00+00:00"}
+        scheduler.save_state(tmp_path)
+
+        state = json.loads((tmp_path / _STATE_FILENAME).read_text(encoding="utf-8"))
+        assert state["agent_last_dispatch"] == {"TestAgent": "2026-01-15T12:00:00+00:00"}
+
+    def test_is_agent_on_cooldown_no_prior_dispatch(self):
+        """Returns False when agent has no prior dispatch record."""
+        scheduler = Scheduler(_make_config())
+        assert scheduler._is_agent_on_cooldown("UnknownAgent", 60) is False
+
+    def test_is_agent_on_cooldown_within_window(self):
+        """Returns True when elapsed time is less than cooldown_seconds."""
+        scheduler = Scheduler(_make_config())
+        recent = datetime.now(timezone.utc).isoformat()
+        scheduler.agent_last_dispatch = {"TestAgent": recent}
+
+        assert scheduler._is_agent_on_cooldown("TestAgent", 3600) is True
+
+    def test_is_agent_on_cooldown_after_window(self):
+        """Returns False after the cooldown window has passed."""
+        scheduler = Scheduler(_make_config())
+        old = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+        scheduler.agent_last_dispatch = {"TestAgent": old}
+
+        assert scheduler._is_agent_on_cooldown("TestAgent", 60) is False
+
+    @mock.patch("crazypumpkin.agents.code_generator.safe_write_text")
+    @mock.patch("crazypumpkin.llm.registry.ProviderRegistry.call")
+    @mock.patch("crazypumpkin.llm.registry.ProviderRegistry.call_json")
+    def test_dispatch_records_agent_timestamps(
+        self, mock_call_json, mock_call, mock_write, tmp_path
+    ):
+        """_process_product records dispatch timestamps for agents."""
+        workspace = tmp_path / "products" / "app"
+        data_dir = workspace / "data"
+        _seed_store_with_goal(data_dir, project_id="proj1")
+
+        mock_call_json.return_value = {
+            "tasks": [
+                {
+                    "title": "Sub task",
+                    "description": "Do something",
+                    "priority": 1,
+                    "acceptance_criteria": ["works"],
+                    "depends_on": [],
+                }
+            ]
+        }
+        mock_call.return_value = "```file.py\npass\n```\n"
+
+        config = _make_config(
+            products=[ProductConfig(name="App", workspace=str(workspace))]
+        )
+        scheduler = Scheduler(config)
+        scheduler.run_once()
+
+        assert "StrategyAgent" in scheduler.agent_last_dispatch
+        assert "CodeGeneratorAgent" in scheduler.agent_last_dispatch
+        # Timestamps should be valid ISO-8601
+        datetime.fromisoformat(scheduler.agent_last_dispatch["StrategyAgent"])
+        datetime.fromisoformat(scheduler.agent_last_dispatch["CodeGeneratorAgent"])
