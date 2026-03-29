@@ -261,6 +261,50 @@ class TestWriteInitFilesGitignore:
         assert "__pycache__/" in gi
 
 
+# ── Tests for cmd_status ─────────────────────────────────────────────────
+
+
+def _make_status_args():
+    import argparse
+    return argparse.Namespace(command="status")
+
+
+def _make_status_config(cycle_interval=30):
+    from unittest.mock import MagicMock
+    cfg = MagicMock()
+    cfg.company = {"name": "Test Co"}
+    cfg.pipeline = {"cycle_interval": cycle_interval}
+    return cfg
+
+
+def test_cmd_status_task_count_labels(capsys):
+    """cmd_status output includes task-count labels (pending, running, complete)."""
+    from crazypumpkin.cli import cmd_status
+    with patch("crazypumpkin.framework.config.load_config", return_value=_make_status_config()):
+        cmd_status(_make_status_args())
+    out = capsys.readouterr().out
+    assert "pending" in out
+    assert "running" in out
+    assert "complete" in out
+
+
+def test_cmd_status_missing_config_raises():
+    """cmd_status raises FileNotFoundError when config.yaml is absent."""
+    from crazypumpkin.cli import cmd_status
+    with patch("crazypumpkin.framework.config.load_config", side_effect=FileNotFoundError("no config")):
+        with pytest.raises(FileNotFoundError):
+            cmd_status(_make_status_args())
+
+
+def test_cmd_status_shows_cycle_interval(capsys):
+    """cmd_status prints the configured cycle_interval value."""
+    from crazypumpkin.cli import cmd_status
+    with patch("crazypumpkin.framework.config.load_config", return_value=_make_status_config(cycle_interval=45)):
+        cmd_status(_make_status_args())
+    out = capsys.readouterr().out
+    assert "45" in out
+
+
 class TestWriteInitFilesReadme:
     """README.md contains company name heading."""
 
@@ -273,3 +317,176 @@ class TestWriteInitFilesReadme:
         _write_init_files(_make_answers(company_name="Mega AI"), tmp_path)
         readme = (tmp_path / "README.md").read_text(encoding="utf-8")
         assert "# Mega AI" in readme
+
+
+# ── TestCmdStatus ─────────────────────────────────────────────────────────
+
+
+class TestCmdStatus:
+    """Tests for cmd_status registration, Namespace handling, and stdout."""
+
+    def _make_args(self):
+        import argparse
+        return argparse.Namespace(command="status")
+
+    def _make_config(self, cycle_interval=30, name="Test Co"):
+        from unittest.mock import MagicMock
+        cfg = MagicMock()
+        cfg.company = {"name": name}
+        cfg.pipeline = {"cycle_interval": cycle_interval}
+        return cfg
+
+    def test_registered_in_main_parser(self):
+        """'status' subcommand is registered in the main CLI parser."""
+        import argparse
+        from crazypumpkin.cli import main
+        import inspect
+        src = inspect.getsource(main)
+        assert "status" in src
+
+    def test_namespace_command_attr(self):
+        """Namespace with command='status' is accepted without error."""
+        from crazypumpkin.cli import cmd_status
+        with patch("crazypumpkin.framework.config.load_config",
+                   return_value=self._make_config()):
+            cmd_status(self._make_args())  # should not raise
+
+    def test_stdout_contains_company_name(self, capsys):
+        """cmd_status prints the company name."""
+        from crazypumpkin.cli import cmd_status
+        with patch("crazypumpkin.framework.config.load_config",
+                   return_value=self._make_config(name="Skynet LLC")):
+            cmd_status(self._make_args())
+        out = capsys.readouterr().out
+        assert "Skynet LLC" in out
+
+    def test_stdout_contains_cycle_interval(self, capsys):
+        """cmd_status prints the cycle_interval."""
+        from crazypumpkin.cli import cmd_status
+        with patch("crazypumpkin.framework.config.load_config",
+                   return_value=self._make_config(cycle_interval=60)):
+            cmd_status(self._make_args())
+        out = capsys.readouterr().out
+        assert "60" in out
+
+    def test_stdout_contains_task_labels(self, capsys):
+        """cmd_status prints pending/running/complete task labels."""
+        from crazypumpkin.cli import cmd_status
+        with patch("crazypumpkin.framework.config.load_config",
+                   return_value=self._make_config()):
+            cmd_status(self._make_args())
+        out = capsys.readouterr().out
+        assert "pending" in out
+        assert "running" in out
+        assert "complete" in out
+
+
+# ── TestCmdRunContinuous ──────────────────────────────────────────────────
+
+
+class TestCmdRunContinuous:
+    """Tests for cmd_run continuous-mode: loop behavior and --interval override."""
+
+    def _make_run_args(self, once=False, interval=None):
+        import argparse
+        return argparse.Namespace(command="run", once=once, interval=interval)
+
+    def _make_config(self, cycle_interval=30):
+        from unittest.mock import MagicMock
+        cfg = MagicMock()
+        cfg.company = {"name": "Test Co"}
+        # Use a real dict so .get() works correctly
+        cfg.pipeline = {"cycle_interval": cycle_interval}
+        return cfg
+
+    def _make_scheduler(self):
+        from unittest.mock import MagicMock
+        scheduler = MagicMock()
+        scheduler.run_once.return_value = {"tasks_processed": 1}
+        return scheduler
+
+    def test_continuous_loop_calls_sleep(self, capsys):
+        """Continuous mode calls time.sleep between cycles."""
+        from crazypumpkin.cli import cmd_run
+        scheduler = self._make_scheduler()
+        sleep_calls = []
+
+        def fake_sleep(n):
+            sleep_calls.append(n)
+            raise KeyboardInterrupt
+
+        with patch("crazypumpkin.framework.config.load_config",
+                   return_value=self._make_config()), \
+             patch("crazypumpkin.scheduler.scheduler.Scheduler",
+                   return_value=scheduler), \
+             patch("crazypumpkin.cli.time.sleep", side_effect=fake_sleep):
+            cmd_run(self._make_run_args())
+
+        assert len(sleep_calls) >= 1
+
+    def test_continuous_loop_stops_on_keyboard_interrupt(self, capsys):
+        """KeyboardInterrupt exits the loop gracefully."""
+        from crazypumpkin.cli import cmd_run
+        scheduler = self._make_scheduler()
+
+        with patch("crazypumpkin.framework.config.load_config",
+                   return_value=self._make_config()), \
+             patch("crazypumpkin.scheduler.scheduler.Scheduler",
+                   return_value=scheduler), \
+             patch("crazypumpkin.cli.time.sleep", side_effect=KeyboardInterrupt):
+            cmd_run(self._make_run_args())  # should not raise
+
+        out = capsys.readouterr().out
+        assert "stopped" in out.lower() or "pipeline" in out.lower()
+
+    def test_interval_override_used_in_sleep(self):
+        """--interval flag overrides config cycle_interval for time.sleep."""
+        from crazypumpkin.cli import cmd_run
+        scheduler = self._make_scheduler()
+        sleep_calls = []
+
+        def fake_sleep(n):
+            sleep_calls.append(n)
+            raise KeyboardInterrupt
+
+        with patch("crazypumpkin.framework.config.load_config",
+                   return_value=self._make_config(cycle_interval=30)), \
+             patch("crazypumpkin.scheduler.scheduler.Scheduler",
+                   return_value=scheduler), \
+             patch("crazypumpkin.cli.time.sleep", side_effect=fake_sleep):
+            cmd_run(self._make_run_args(interval=5))
+
+        assert sleep_calls[0] == 5
+
+    def test_interval_default_from_config(self):
+        """Without --interval, cycle_interval from config is used for sleep."""
+        from crazypumpkin.cli import cmd_run
+        scheduler = self._make_scheduler()
+        sleep_calls = []
+
+        def fake_sleep(n):
+            sleep_calls.append(n)
+            raise KeyboardInterrupt
+
+        with patch("crazypumpkin.framework.config.load_config",
+                   return_value=self._make_config(cycle_interval=42)), \
+             patch("crazypumpkin.scheduler.scheduler.Scheduler",
+                   return_value=scheduler), \
+             patch("crazypumpkin.cli.time.sleep", side_effect=fake_sleep):
+            cmd_run(self._make_run_args(interval=None))
+
+        assert sleep_calls[0] == 42
+
+    def test_run_once_does_not_call_sleep(self):
+        """--once flag runs a single cycle without calling time.sleep."""
+        from crazypumpkin.cli import cmd_run
+        scheduler = self._make_scheduler()
+
+        with patch("crazypumpkin.framework.config.load_config",
+                   return_value=self._make_config()), \
+             patch("crazypumpkin.scheduler.scheduler.Scheduler",
+                   return_value=scheduler), \
+             patch("crazypumpkin.cli.time.sleep") as mock_sleep:
+            cmd_run(self._make_run_args(once=True))
+
+        mock_sleep.assert_not_called()

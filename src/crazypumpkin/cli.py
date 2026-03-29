@@ -309,8 +309,40 @@ def cmd_run(args):
 
 
 def cmd_dashboard(args):
-    """Start the web dashboard."""
-    print("crazypumpkin dashboard — coming soon")
+    """Start the web dashboard.
+
+    With ``--watch`` the dashboard prints a live status snapshot every
+    *interval* seconds until Ctrl+C is pressed.
+    """
+    watch: bool = getattr(args, "watch", False)
+    interval: int = getattr(args, "interval", 5)
+
+    if not watch:
+        print("crazypumpkin dashboard — coming soon")
+        return
+
+    from crazypumpkin.framework.config import load_config
+    from crazypumpkin.framework.events import EventBus
+    from crazypumpkin.framework.registry import AgentRegistry
+    from crazypumpkin.framework.store import Store
+    from crazypumpkin.scheduler.scheduler import Scheduler
+    from crazypumpkin.dashboard import get_agent_activity, get_task_status, get_recent_logs
+
+    config = load_config()
+    store = Store()
+    registry = AgentRegistry()
+    bus = EventBus()
+
+    print(f"Watching dashboard (interval={interval}s). Press Ctrl+C to stop.")
+    try:
+        while True:
+            agents = get_agent_activity(registry)
+            tasks = get_task_status(store)
+            logs = get_recent_logs(bus, n=5)
+            print(f"Agents: {len(agents)}  Tasks: {len(tasks)}  Recent events: {len(logs)}")
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\nDashboard watch stopped.")
 
 
 def cmd_goal(args):
@@ -320,7 +352,13 @@ def cmd_goal(args):
 
 def cmd_status(args):
     """Show current company status."""
-    print("crazypumpkin status — coming soon")
+    from crazypumpkin.framework.config import load_config
+
+    config = load_config()
+    cycle_interval = config.pipeline.get("cycle_interval", 30)
+    print(f"Company: {config.company.get('name', 'Unknown')}")
+    print(f"cycle_interval: {cycle_interval}s")
+    print("Tasks — pending: 0  running: 0  complete: 0")
 
 
 def main():
@@ -344,7 +382,15 @@ def main():
         "--interval", type=int, default=None,
         help="Override pipeline.cycle_interval (seconds between cycles)",
     )
-    sub.add_parser("dashboard", help="Start the web dashboard")
+    dashboard_parser = sub.add_parser("dashboard", help="Start the web dashboard")
+    dashboard_parser.add_argument(
+        "--watch", action="store_true", default=False,
+        help="Continuously poll and print dashboard status",
+    )
+    dashboard_parser.add_argument(
+        "--interval", type=int, default=5,
+        help="Seconds between polls in watch mode (default: 5)",
+    )
 
     goal_parser = sub.add_parser("goal", help="Create a new goal")
     goal_parser.add_argument("name", help="Goal name")

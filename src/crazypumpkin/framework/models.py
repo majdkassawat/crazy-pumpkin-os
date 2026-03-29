@@ -324,6 +324,19 @@ class AuditEvent:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+# ── Delivery ─────────────────────────────────────────────────────────
+
+class DeliveryMode(str, Enum):
+    PULL_REQUEST = "pull_request"
+    DIRECT_PUSH = "direct_push"
+
+
+@dataclass
+class DeliveryConfig:
+    """Configuration for how completed work is delivered."""
+    delivery_mode: DeliveryMode = DeliveryMode.PULL_REQUEST
+
+
 # ── Agent Metrics ─────────────────────────────────────────────────────
 
 @dataclass
