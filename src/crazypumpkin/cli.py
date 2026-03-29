@@ -11,6 +11,8 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -199,9 +201,38 @@ def _write_init_files(answers: dict, target_dir: Path) -> None:
     (target_dir / "README.md").write_text(readme_content, encoding="utf-8")
 
 
+def _get_default_json_path() -> Path:
+    """Return the path to the bundled examples/default.json."""
+    return Path(__file__).resolve().parent.parent.parent / "examples" / "default.json"
+
+
 def cmd_init(args):
-    """Interactive setup wizard for a new AI company."""
-    print("🎃 Crazy Pumpkin OS — New AI Company Setup\n")
+    """Set up a new project by copying the default configuration.
+
+    Copies examples/default.json into the current directory as
+    crazypumpkin.json.  Refuses to overwrite an existing file unless
+    the ``--force`` flag is supplied.  After copying, runs the
+    interactive setup wizard to generate additional project files.
+    """
+    target_dir = Path.cwd()
+    config_dest = target_dir / "crazypumpkin.json"
+    force = getattr(args, "force", False)
+
+    # --- copy default.json → crazypumpkin.json ---
+    if config_dest.exists() and not force:
+        print(
+            "crazypumpkin.json already exists. "
+            "Use --force to overwrite."
+        )
+        sys.exit(1)
+
+    default_src = _get_default_json_path()
+    shutil.copy2(str(default_src), str(config_dest))
+    print(f"Created {config_dest}")
+    print("Quickstart: see README.md for next steps.")
+
+    # --- interactive wizard ---
+    print("\n🎃 Crazy Pumpkin OS — New AI Company Setup\n")
 
     # 1. Company name
     company_name = input("Company name [My AI Company]: ").strip()
@@ -232,7 +263,6 @@ def cmd_init(args):
         "dashboard_password": dashboard_password,
     }
 
-    target_dir = Path.cwd()
     _write_init_files(answers, target_dir)
     print(f"\nInitialized '{company_name}' in {target_dir}")
     print(
@@ -300,7 +330,11 @@ def main():
     )
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("init", help="Set up a new AI company")
+    init_parser = sub.add_parser("init", help="Set up a new AI company")
+    init_parser.add_argument(
+        "--force", action="store_true", default=False,
+        help="Overwrite existing crazypumpkin.json",
+    )
     run_parser = sub.add_parser("run", help="Start the pipeline")
     run_parser.add_argument(
         "--once", action="store_true", default=False,

@@ -15,7 +15,18 @@ from crazypumpkin.cli import cmd_init, _write_init_files
 def fake_args():
     """Minimal argparse namespace for cmd_init."""
     import argparse
-    return argparse.Namespace(command="init")
+    return argparse.Namespace(command="init", force=True)
+
+
+@pytest.fixture(autouse=True)
+def _mock_default_json(tmp_path):
+    """Provide a dummy default.json so cmd_init copy succeeds."""
+    examples_dir = tmp_path / "_examples"
+    examples_dir.mkdir(exist_ok=True)
+    default_json = examples_dir / "default.json"
+    default_json.write_text("{}", encoding="utf-8")
+    with patch("crazypumpkin.cli._get_default_json_path", return_value=default_json):
+        yield
 
 
 # ── Test 1: defaults are used when user presses Enter ────────────────────

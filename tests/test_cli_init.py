@@ -263,13 +263,25 @@ def test_all_top_level_yaml_sections(tmp_path, answers):
 
 def _run_cmd_init(tmp_path, company_name="Test Corp"):
     """Helper: run cmd_init with mocked inputs and capture stdout."""
+    import argparse
+
+    # Create a real default.json in a temp location so copy works
+    examples_dir = tmp_path / "_examples"
+    examples_dir.mkdir(exist_ok=True)
+    default_json = examples_dir / "default.json"
+    default_json.write_text("{}", encoding="utf-8")
+
+    args = argparse.Namespace(command="init", force=True)
     inputs = iter([company_name, "anthropic_api", "sk-test", "/tmp/product", "pass"])
     with patch("builtins.input", side_effect=inputs), \
-         patch("crazypumpkin.cli.Path") as mock_path:
+         patch("crazypumpkin.cli.Path") as mock_path, \
+         patch("crazypumpkin.cli._get_default_json_path", return_value=default_json):
         mock_path.cwd.return_value = tmp_path
+        # Let Path(target_dir) return the real path so mkdir works
+        mock_path.side_effect = Path
         buf = io.StringIO()
         with redirect_stdout(buf):
-            cmd_init(None)
+            cmd_init(args)
         return buf.getvalue()
 
 
