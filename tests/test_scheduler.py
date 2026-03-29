@@ -449,6 +449,36 @@ class TestAgentCooldown:
 
         assert scheduler._is_agent_on_cooldown("TestAgent", 60) is False
 
+    def test_is_agent_on_cooldown_frozen_clock_within_window(self):
+        """With a frozen clock, cooldown returns True when inside the window."""
+        frozen_now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        last_dispatch = datetime(2026, 6, 1, 11, 50, 0, tzinfo=timezone.utc)
+
+        scheduler = Scheduler(_make_config())
+        scheduler.agent_last_dispatch = {"TestAgent": last_dispatch.isoformat()}
+
+        with mock.patch(
+            "crazypumpkin.scheduler.scheduler.datetime"
+        ) as mock_dt:
+            mock_dt.now.return_value = frozen_now
+            mock_dt.fromisoformat = datetime.fromisoformat
+            assert scheduler._is_agent_on_cooldown("TestAgent", 3600) is True
+
+    def test_is_agent_on_cooldown_frozen_clock_after_window(self):
+        """With a frozen clock, cooldown returns False when past the window."""
+        frozen_now = datetime(2026, 6, 1, 14, 0, 0, tzinfo=timezone.utc)
+        last_dispatch = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        scheduler = Scheduler(_make_config())
+        scheduler.agent_last_dispatch = {"TestAgent": last_dispatch.isoformat()}
+
+        with mock.patch(
+            "crazypumpkin.scheduler.scheduler.datetime"
+        ) as mock_dt:
+            mock_dt.now.return_value = frozen_now
+            mock_dt.fromisoformat = datetime.fromisoformat
+            assert scheduler._is_agent_on_cooldown("TestAgent", 3600) is False
+
     @mock.patch("crazypumpkin.agents.code_generator.safe_write_text")
     @mock.patch("crazypumpkin.llm.registry.ProviderRegistry.call")
     @mock.patch("crazypumpkin.llm.registry.ProviderRegistry.call_json")
@@ -484,3 +514,295 @@ class TestAgentCooldown:
         # Timestamps should be valid ISO-8601
         datetime.fromisoformat(scheduler.agent_last_dispatch["StrategyAgent"])
         datetime.fromisoformat(scheduler.agent_last_dispatch["CodeGeneratorAgent"])
+
+
+# ---------------------------------------------------------------------------
+# Tests — trigger expression integration with scheduler dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestTriggerIntegration:
+    """Tests for trigger-based dispatch decisions in the scheduler."""
+
+    def _make_config_with_agents(self, agent_defs, products=None):
+        """Return a Config with custom AgentDefinitions."""
+        return Config(
+            company={"name": "TestCo"},
+            products=products or [],
+            llm={
+                "default_provider": "anthropic_api",
+                "providers": {"anthropic_api": {"api_key": "fake"}},
+                "agent_models": {},
+            },
+            agents=agent_defs,
+        )
+
+    def test_never_trigger_skips_dispatch(self):
+        """Agent with trigger='never' causes _should_dispatch to return False."""
+        config = self._make_config_with_agents([
+            AgentDefinition(name="NeverAgent", role=AgentRole.STRATEGY, trigger="never"),
+        ])
+        scheduler = Scheduler(config)
+        snapshot = {"planned_tasks": 5, "in_progress_tasks": 0, "hours_since_last_run": 10.0}
+        assert scheduler._should_dispatch("NeverAgent", snapshot) is False
+
+    def test_always_trigger_dispatches(self):
+        """Agent with trigger='always' causes _should_dispatch to return True."""
+        config = self._make_config_with_agents([
+            AgentDefinition(name="AlwaysAgent", role=AgentRole.STRATEGY, trigger="always"),
+        ])
+        scheduler = Scheduler(config)
+        snapshot = {"planned_tasks": 0, "in_progress_tasks": 0, "hours_since_last_run": 0.0}
+        assert scheduler._should_dispatch("AlwaysAgent", snapshot) is True
+
+    def test_default_trigger_is_always(self):
+        """Agent with empty trigger defaults to 'always' and dispatches."""
+        config = self._make_config_with_agents([
+            AgentDefinition(name="DefaultAgent", role=AgentRole.EXECUTION, trigger=""),
+        ])
+        scheduler = Scheduler(config)
+        snapshot = {"planned_tasks": 0, "in_progress_tasks": 0, "hours_since_last_run": 0.0}
+        assert scheduler._should_dispatch("DefaultAgent", snapshot) is True
+
+    def test_snapshot_trigger_true_dispatches(self):
+        """Trigger 'planned_tasks > 0' dispatches when planned_tasks=5."""
+        config = self._make_config_with_agents([
+            AgentDefinition(
+                name="ConditionalAgent", role=AgentRole.EXECUTION,
+                trigger="planned_tasks > 0",
+            ),
+        ])
+        scheduler = Scheduler(config)
+        snapshot = {"planned_tasks": 5, "in_progress_tasks": 0, "hours_since_last_run": 1.0}
+        assert scheduler._should_dispatch("ConditionalAgent", snapshot) is True
+
+    def test_snapshot_trigger_false_skips(self):
+        """Trigger 'planned_tasks > 5' skips when planned_tasks=3."""
+        config = self._make_config_with_agents([
+            AgentDefinition(
+                name="ConditionalAgent", role=AgentRole.EXECUTION,
+                trigger="planned_tasks > 5",
+            ),
+        ])
+        scheduler = Scheduler(config)
+        snapshot = {"planned_tasks": 3, "in_progress_tasks": 0, "hours_since_last_run": 1.0}
+        assert scheduler._should_dispatch("ConditionalAgent", snapshot) is False
+
+    def test_compound_trigger_and_both_true(self):
+        """Compound AND trigger dispatches when both conditions are met."""
+        config = self._make_config_with_agents([
+            AgentDefinition(
+                name="CompoundAgent", role=AgentRole.EXECUTION,
+                trigger="planned_tasks > 0 AND hours_since_last_run > 1",
+            ),
+        ])
+        scheduler = Scheduler(config)
+        snapshot = {"planned_tasks": 3, "in_progress_tasks": 0, "hours_since_last_run": 2.0}
+        assert scheduler._should_dispatch("CompoundAgent", snapshot) is True
+
+    def test_compound_trigger_and_one_false(self):
+        """Compound AND trigger skips when one condition is false."""
+        config = self._make_config_with_agents([
+            AgentDefinition(
+                name="CompoundAgent", role=AgentRole.EXECUTION,
+                trigger="planned_tasks > 0 AND hours_since_last_run > 1",
+            ),
+        ])
+        scheduler = Scheduler(config)
+        snapshot = {"planned_tasks": 3, "in_progress_tasks": 0, "hours_since_last_run": 0.5}
+        assert scheduler._should_dispatch("CompoundAgent", snapshot) is False
+
+    def test_cooldown_blocks_dispatch_even_when_trigger_true(self):
+        """Agent on cooldown is skipped even when trigger evaluates True."""
+        config = self._make_config_with_agents([
+            AgentDefinition(
+                name="CooldownAgent", role=AgentRole.EXECUTION,
+                trigger="always", cooldown_seconds=3600,
+            ),
+        ])
+        scheduler = Scheduler(config)
+        scheduler.agent_last_dispatch = {
+            "CooldownAgent": datetime.now(timezone.utc).isoformat()
+        }
+        snapshot = {"planned_tasks": 5, "in_progress_tasks": 0, "hours_since_last_run": 10.0}
+        assert scheduler._should_dispatch("CooldownAgent", snapshot) is False
+
+    @mock.patch("crazypumpkin.agents.code_generator.safe_write_text")
+    @mock.patch("crazypumpkin.llm.registry.ProviderRegistry.call")
+    @mock.patch("crazypumpkin.llm.registry.ProviderRegistry.call_json")
+    def test_never_trigger_agent_execute_not_called(
+        self, mock_call_json, mock_call, mock_write, tmp_path
+    ):
+        """End-to-end: strategy agent with trigger='never' does NOT call execute."""
+        workspace = tmp_path / "products" / "app"
+        data_dir = workspace / "data"
+        _seed_store_with_goal(data_dir)
+
+        mock_call_json.return_value = {"tasks": []}
+        mock_call.return_value = ""
+
+        config = Config(
+            company={"name": "TestCo"},
+            products=[ProductConfig(name="App", workspace=str(workspace))],
+            llm={
+                "default_provider": "anthropic_api",
+                "providers": {"anthropic_api": {"api_key": "fake"}},
+                "agent_models": {},
+            },
+            agents=[
+                AgentDefinition(name="StrategyAgent", role=AgentRole.STRATEGY, trigger="never"),
+                AgentDefinition(name="CodeGeneratorAgent", role=AgentRole.EXECUTION, trigger="never"),
+            ],
+        )
+        scheduler = Scheduler(config)
+        scheduler.run_once()
+
+        # Neither LLM call endpoint should have been invoked
+        mock_call_json.assert_not_called()
+        mock_call.assert_not_called()
+
+    @mock.patch("crazypumpkin.agents.code_generator.safe_write_text")
+    @mock.patch("crazypumpkin.llm.registry.ProviderRegistry.call")
+    @mock.patch("crazypumpkin.llm.registry.ProviderRegistry.call_json")
+    def test_always_trigger_agent_execute_is_called(
+        self, mock_call_json, mock_call, mock_write, tmp_path
+    ):
+        """End-to-end: strategy agent with trigger='always' DOES call execute."""
+        workspace = tmp_path / "products" / "app"
+        data_dir = workspace / "data"
+        _seed_store_with_goal(data_dir)
+
+        mock_call_json.return_value = {
+            "tasks": [
+                {
+                    "title": "Sub",
+                    "description": "Do it",
+                    "priority": 1,
+                    "acceptance_criteria": ["done"],
+                    "depends_on": [],
+                }
+            ]
+        }
+        mock_call.return_value = "```file.py\npass\n```\n"
+
+        config = Config(
+            company={"name": "TestCo"},
+            products=[ProductConfig(name="App", workspace=str(workspace))],
+            llm={
+                "default_provider": "anthropic_api",
+                "providers": {"anthropic_api": {"api_key": "fake"}},
+                "agent_models": {},
+            },
+            agents=[
+                AgentDefinition(name="StrategyAgent", role=AgentRole.STRATEGY, trigger="always"),
+                AgentDefinition(name="CodeGeneratorAgent", role=AgentRole.EXECUTION, trigger="always"),
+            ],
+        )
+        scheduler = Scheduler(config)
+        scheduler.run_once()
+
+        mock_call_json.assert_called()
+        mock_call.assert_called()
+
+    def test_build_snapshot_populates_planned_tasks(self, tmp_path):
+        """_build_snapshot reflects the actual task count from the store."""
+        from crazypumpkin.framework.store import Store
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir(parents=True)
+
+        store = Store(data_dir=data_dir)
+        # Add 3 planned tasks
+        for i in range(3):
+            t = Task(
+                id=f"t{i}", project_id="p1", title=f"Task {i}",
+                status=TaskStatus.PLANNED,
+            )
+            store.add_task(t)
+
+        scheduler = Scheduler(_make_config())
+        snapshot = scheduler._build_snapshot(store)
+
+        assert snapshot["planned_tasks"] == 3
+        assert snapshot["in_progress_tasks"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests — save_state / load_state round-trip for agent_last_dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestAgentLastDispatchRoundTrip:
+    """save_state/load_state preserves agent_last_dispatch exactly."""
+
+    def test_round_trip_preserves_timestamps(self, tmp_path):
+        """agent_last_dispatch survives a save_state → load_state cycle."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir(parents=True)
+
+        original_dispatches = {
+            "StrategyAgent": "2026-03-01T10:00:00+00:00",
+            "CodeGeneratorAgent": "2026-03-01T11:30:00+00:00",
+        }
+
+        scheduler = Scheduler(_make_config())
+        scheduler.agent_last_dispatch = dict(original_dispatches)
+        scheduler.save_state(data_dir)
+
+        scheduler2 = Scheduler(_make_config())
+        scheduler2.load_state(data_dir)
+
+        assert scheduler2.agent_last_dispatch == original_dispatches
+
+    def test_round_trip_empty_dispatches(self, tmp_path):
+        """Empty agent_last_dispatch round-trips correctly."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir(parents=True)
+
+        scheduler = Scheduler(_make_config())
+        scheduler.agent_last_dispatch = {}
+        scheduler.save_state(data_dir)
+
+        scheduler2 = Scheduler(_make_config())
+        scheduler2.load_state(data_dir)
+
+        assert scheduler2.agent_last_dispatch == {}
+
+    def test_round_trip_multiple_agents(self, tmp_path):
+        """Multiple agent timestamps are all preserved through round-trip."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir(parents=True)
+
+        dispatches = {
+            "Agent1": "2026-01-01T00:00:00+00:00",
+            "Agent2": "2026-02-15T08:30:00+00:00",
+            "Agent3": "2026-03-20T16:45:00+00:00",
+        }
+
+        scheduler = Scheduler(_make_config())
+        scheduler.agent_last_dispatch = dict(dispatches)
+        scheduler.save_state(data_dir)
+
+        scheduler2 = Scheduler(_make_config())
+        scheduler2.load_state(data_dir)
+
+        assert scheduler2.agent_last_dispatch == dispatches
+        # Verify each timestamp individually
+        for agent, ts in dispatches.items():
+            assert scheduler2.agent_last_dispatch[agent] == ts
+
+    def test_round_trip_cycle_count_also_persisted(self, tmp_path):
+        """cycle_count and last_run are also preserved alongside agent_last_dispatch."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir(parents=True)
+
+        scheduler = Scheduler(_make_config())
+        scheduler.agent_last_dispatch = {"A": "2026-01-01T00:00:00+00:00"}
+        scheduler.save_state(data_dir)
+
+        scheduler2 = Scheduler(_make_config())
+        scheduler2.load_state(data_dir)
+
+        assert scheduler2.cycle_count == 1
+        assert scheduler2.last_run is not None
+        assert scheduler2.agent_last_dispatch == {"A": "2026-01-01T00:00:00+00:00"}
