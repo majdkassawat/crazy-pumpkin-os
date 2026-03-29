@@ -93,6 +93,7 @@ class ProviderRegistry:
         timeout: float | None = None,
         cwd: str | None = None,
         tools: list | None = None,
+        system: str | None = None,
     ) -> str:
         """Dispatch a text call to the provider assigned to *agent*.
 
@@ -105,7 +106,7 @@ class ProviderRegistry:
         self._check_budget(agent, agent_config)
         provider, agent_model = self.get_provider(agent)
         effective_model = model if model is not None else agent_model
-        return provider.call(prompt, model=effective_model, timeout=timeout, cwd=cwd, tools=tools)
+        return provider.call(prompt, model=effective_model, timeout=timeout, cwd=cwd, tools=tools, system=system)
 
     def call_multi_turn(
         self,
