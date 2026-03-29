@@ -42,6 +42,18 @@ class MockLLMProvider(LLMProvider):
         self.last_prompt = prompt
         return {"mock": True, "prompt": prompt}
 
+    def call_multi_turn(
+        self,
+        prompt: str,
+        *,
+        max_turns: int = 10,
+        tools: list | None = None,
+        timeout: float | None = None,
+        cwd: str | None = None,
+    ) -> str:
+        self.last_prompt = prompt
+        return f"mock-multi-turn:{prompt}"
+
 
 # ---------------------------------------------------------------------------
 # MockLLMProvider tests
@@ -383,6 +395,181 @@ class TestAnthropicProvider:
 
         assert isinstance(result, dict)
         assert result == payload
+
+    # -- call_json() timeout forwarding ----------------------------------------
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_call_json_forwards_timeout(self, mock_cls):
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response('{"ok": true}')
+
+        provider.call_json("give me json", timeout=30.0)
+
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args.kwargs
+        assert call_kwargs["timeout"] == 30.0
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_call_json_omits_timeout_when_none(self, mock_cls):
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response('{"ok": true}')
+
+        provider.call_json("give me json")
+
+        call_kwargs = mock_create.call_args.kwargs
+        assert "timeout" not in call_kwargs
+
+    # -- call_multi_turn() -----------------------------------------------------
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_no_tools_falls_back_to_call(self, mock_cls):
+        """When tools is None, call_multi_turn delegates to single-turn call()."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response("single turn answer")
+
+        result = provider.call_multi_turn("hello")
+
+        assert result == "single turn answer"
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_single_text_response(self, mock_cls):
+        """Model responds with text only (stop_reason='end_turn') → returns immediately."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        resp = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="done")],
+            stop_reason="end_turn",
+        )
+        mock_create.return_value = resp
+
+        tools = [{"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}}]
+        result = provider.call_multi_turn("do something", tools=tools)
+
+        assert result == "done"
+        assert mock_create.call_count == 1
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_tool_use_loop(self, mock_cls):
+        """Model issues a tool_use, gets result, then responds with text."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+
+        # Turn 1: model requests tool use
+        tool_block = SimpleNamespace(
+            type="tool_use", id="tu_1", name="Read",
+            input={"file_path": "/tmp/test.txt"},
+        )
+        turn1 = SimpleNamespace(
+            content=[tool_block],
+            stop_reason="tool_use",
+        )
+        # Turn 2: model responds with text
+        turn2 = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="file contents are xyz")],
+            stop_reason="end_turn",
+        )
+        mock_create.side_effect = [turn1, turn2]
+
+        tools = [{"name": "Read", "description": "Read", "input_schema": {"type": "object", "properties": {}}}]
+        result = provider.call_multi_turn("read the file", tools=tools)
+
+        assert "file contents are xyz" in result
+        assert mock_create.call_count == 2
+
+        # Verify tool_result was sent back (index 2 = tool_result message,
+        # since messages is [user, assistant(turn1), user(tool_results), ...])
+        second_call_messages = mock_create.call_args_list[1].kwargs["messages"]
+        tool_result_msg = second_call_messages[2]
+        assert tool_result_msg["role"] == "user"
+        assert tool_result_msg["content"][0]["type"] == "tool_result"
+        assert tool_result_msg["content"][0]["tool_use_id"] == "tu_1"
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_max_turns_terminates(self, mock_cls):
+        """Loop stops after max_turns even if model keeps requesting tools."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+
+        tool_block = SimpleNamespace(
+            type="tool_use", id="tu_loop", name="Bash",
+            input={"command": "echo hi"},
+        )
+        # Every turn requests more tools
+        mock_create.return_value = SimpleNamespace(
+            content=[tool_block],
+            stop_reason="tool_use",
+        )
+
+        tools = [{"name": "Bash", "description": "Run", "input_schema": {"type": "object", "properties": {}}}]
+        result = provider.call_multi_turn("loop", tools=tools, max_turns=3)
+
+        assert isinstance(result, str)
+        assert mock_create.call_count == 3
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_custom_tool_executor(self, mock_cls):
+        """tool_executor callback receives tool name and input, returns result."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+
+        tool_block = SimpleNamespace(
+            type="tool_use", id="tu_exec", name="Read",
+            input={"file_path": "/etc/hosts"},
+        )
+        turn1 = SimpleNamespace(content=[tool_block], stop_reason="tool_use")
+        turn2 = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="got it")],
+            stop_reason="end_turn",
+        )
+        mock_create.side_effect = [turn1, turn2]
+
+        executor_calls = []
+
+        def executor(name, inp):
+            executor_calls.append((name, inp))
+            return "127.0.0.1 localhost"
+
+        tools = [{"name": "Read", "description": "Read", "input_schema": {"type": "object", "properties": {}}}]
+        result = provider.call_multi_turn("read hosts", tools=tools, tool_executor=executor)
+
+        assert result == "got it"
+        assert len(executor_calls) == 1
+        assert executor_calls[0] == ("Read", {"file_path": "/etc/hosts"})
+
+        # Verify the executor result was sent back as tool_result content
+        second_call_messages = mock_create.call_args_list[1].kwargs["messages"]
+        tool_result_content = second_call_messages[2]["content"][0]["content"]
+        assert tool_result_content == "127.0.0.1 localhost"
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_empty_tools_list_falls_back(self, mock_cls):
+        """Empty tools list behaves the same as None — single-turn fallback."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response("fallback")
+
+        result = provider.call_multi_turn("hello", tools=[])
+
+        assert result == "fallback"
 
 
 # ---------------------------------------------------------------------------
