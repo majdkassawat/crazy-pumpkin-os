@@ -45,6 +45,7 @@ class Scheduler:
         self._registry = ProviderRegistry(config.llm)
         self.last_run: str | None = None
         self.cycle_count: int = 0
+        self.agent_last_dispatch: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -89,6 +90,7 @@ class Scheduler:
 
         self.last_run = state.get("last_run")
         self.cycle_count = state.get("cycle_count", 0)
+        self.agent_last_dispatch = state.get("agent_last_dispatch", {})
         return state
 
     def save_state(self, data_dir: Path) -> None:
@@ -104,9 +106,23 @@ class Scheduler:
         state = {
             "last_run": self.last_run,
             "cycle_count": self.cycle_count,
+            "agent_last_dispatch": self.agent_last_dispatch,
         }
         state_path = data_dir / _STATE_FILENAME
         state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+    def _is_agent_on_cooldown(self, agent_name: str, cooldown_seconds: int) -> bool:
+        """Return True if *agent_name* was dispatched less than *cooldown_seconds* ago.
+
+        Returns False when there is no prior dispatch record for the agent or
+        when the cooldown window has already elapsed.
+        """
+        last_ts = self.agent_last_dispatch.get(agent_name)
+        if last_ts is None:
+            return False
+        last_dt = datetime.fromisoformat(last_ts)
+        elapsed = (datetime.now(timezone.utc) - last_dt).total_seconds()
+        return elapsed < cooldown_seconds
 
     # ------------------------------------------------------------------
     # Internals
@@ -154,6 +170,7 @@ class Scheduler:
         for goal in pending_goals:
             # 2. Invoke StrategyAgent to decompose goal into developer tasks
             context: dict[str, Any] = {"workspace": str(workspace)}
+            self.agent_last_dispatch["StrategyAgent"] = datetime.now(timezone.utc).isoformat()
             strategy_output = strategy_agent.execute(goal, context)
 
             # Mark the goal as planned
@@ -168,6 +185,7 @@ class Scheduler:
             ]
             for task in new_tasks:
                 code_context: dict[str, Any] = {"workspace": str(workspace)}
+                self.agent_last_dispatch["CodeGeneratorAgent"] = datetime.now(timezone.utc).isoformat()
                 code_output = code_generator.execute(task, code_context)
                 task.output = code_output
                 if task.can_transition(TaskStatus.PLANNED):
@@ -176,7 +194,9 @@ class Scheduler:
 
         # 4. Persist run state
         store.save()
+        current_dispatches = dict(self.agent_last_dispatch)
         self.load_state(data_dir)
+        self.agent_last_dispatch.update(current_dispatches)
         self.save_state(data_dir)
 
         return {"tasks_processed": tasks_processed}
