@@ -53,6 +53,7 @@ class OpenAIProvider(LLMProvider):
         timeout: float | None = None,
         cwd: str | None = None,
         tools: list | None = None,
+        system: str | None = None,
     ) -> str:
         resolved = self._resolve_model(model)
         kwargs: dict = {
