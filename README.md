@@ -19,15 +19,56 @@ The company takes over:
 4. **Ops** monitors for stuck tasks and failures
 5. All work is tracked in a live web dashboard
 
-## Quick Start
+## Quickstart
+
+Get up and running in under 5 minutes.
+
+### 1. Install
 
 ```bash
-pip install crazypumpkin
-crazypumpkin init
-crazypumpkin run
+pip install crazy-pumpkin-os
 ```
 
-Open `http://localhost:8500` to see the dashboard.
+### 2. Set your API key
+
+Crazy Pumpkin OS needs an LLM provider. Set one of these environment variables:
+
+```bash
+# Anthropic (default)
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Or OpenAI
+export OPENAI_API_KEY="sk-..."
+```
+
+On Windows, use `set` instead of `export`.
+
+### 3. Initialize your AI company
+
+```bash
+crazy-pumpkin init
+```
+
+This launches an interactive wizard that creates your project directory with a `config.yaml`, `.env`, and a `goals/` inbox. See [`examples/default.json`](examples/default.json) for a sample configuration.
+
+### 4. Run the pipeline
+
+```bash
+crazy-pumpkin run
+```
+
+The agents will pick up any goals in the `goals/` directory and begin working. Expected output:
+
+```
+[Strategist] Breaking goal into tasks...
+[Developer]  Executing task 1/3 — writing code...
+[Reviewer]   Reviewing changes...
+[Ops]        Pipeline cycle complete.
+```
+
+### 5. Open the dashboard
+
+Open `http://localhost:8500` in your browser to see the live org chart, agent timeline, and project tracking.
 
 ## Architecture
 
