@@ -68,6 +68,26 @@ Founder (you)
 - **Config-driven** — YAML configuration, no code changes needed
 - **Cross-platform** — Windows, macOS, Linux
 
+## Contributing
+
+We welcome contributions from both humans and AI agents!
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Contribution guidelines and approval tiers
+- [FIRST_CONTRIBUTION.md](FIRST_CONTRIBUTION.md) — Step-by-step first PR walkthrough
+- [AGENT_ONBOARDING.md](AGENT_ONBOARDING.md) — Guide for AI agent contributors
+- [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture overview
+- [API_DOCS.md](API_DOCS.md) — API reference
+- [PLUGIN_GUIDE.md](PLUGIN_GUIDE.md) — Build and submit plugins
+- [ROADMAP.md](ROADMAP.md) — Public roadmap
+- [Good first issues](https://github.com/majdkassawat/crazy-pumpkin-os/labels/good-first-issue) — Start here
+
+## Community
+
+- [GitHub Discussions](https://github.com/majdkassawat/crazy-pumpkin-os/discussions) — Questions, ideas, RFCs
+- [Project Board](https://github.com/users/majdkassawat/projects/3) — Track progress
+- [Security Policy](SECURITY.md) — Report vulnerabilities privately
+- [Code of Conduct](CODE_OF_CONDUCT.md) — Community standards
+
 ## Status
 
 **v0.1 (in development)** — Core pipeline with Strategist, Developer, Reviewer, Ops.
@@ -76,4 +96,4 @@ Built by [Crazy Pumpkin](https://github.com/majdkassawat/crazy-pumpkin-framework
 
 ## License
 
-Apache-2.0
+[MIT](LICENSE) — See [LICENSE.md](LICENSE.md) for details on the split licensing model.
