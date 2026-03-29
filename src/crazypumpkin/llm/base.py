@@ -19,3 +19,15 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def call_json(self, prompt: str, **kwargs: object) -> dict | list: ...
+
+    @abstractmethod
+    def call_multi_turn(
+        self,
+        prompt: str,
+        *,
+        max_turns: int = 10,
+        tools: list | None = None,
+        timeout: float | None = None,
+        cwd: str | None = None,
+    ) -> str:
+        """Run an agentic conversation loop until the model stops issuing tool calls or *max_turns* is reached."""
