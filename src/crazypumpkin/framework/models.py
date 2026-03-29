@@ -65,6 +65,30 @@ class AgentRole(str, Enum):
     PRODUCT_MANAGER = "product_manager"
 
 
+@dataclass
+class ProductConfig:
+    """Product definition from configuration."""
+    name: str = ""
+    workspace: str = ""
+    source_dir: str = "src"
+    test_dir: str = "tests"
+    test_command: str = ""
+    git_branch: str = "main"
+    auto_pm: bool = False
+
+
+@dataclass
+class AgentDefinition:
+    """Agent definition from configuration."""
+    name: str = ""
+    role: AgentRole = AgentRole.EXECUTION
+    description: str = ""
+    model: str = ""
+    group: str = ""
+    trigger: str = ""
+    class_path: str = ""
+
+
 class AgentStatus(str, Enum):
     ACTIVE = "active"
     IDLE = "idle"

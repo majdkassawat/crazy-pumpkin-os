@@ -12,7 +12,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from crazypumpkin.framework.config import Config
-from crazypumpkin.framework.models import Task, TaskStatus
+from crazypumpkin.framework.models import (
+    AgentDefinition,
+    AgentRole,
+    ProductConfig,
+    Task,
+    TaskStatus,
+)
 from crazypumpkin.scheduler.scheduler import Scheduler, _STATE_FILENAME
 
 
@@ -20,7 +26,7 @@ from crazypumpkin.scheduler.scheduler import Scheduler, _STATE_FILENAME
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_config(products: list[dict] | None = None) -> Config:
+def _make_config(products: list[ProductConfig] | None = None) -> Config:
     """Return a minimal Config suitable for Scheduler tests."""
     return Config(
         company={"name": "TestCo"},
@@ -30,7 +36,7 @@ def _make_config(products: list[dict] | None = None) -> Config:
             "providers": {"anthropic_api": {"api_key": "fake"}},
             "agent_models": {},
         },
-        agents=[{"name": "TestAgent", "role": "strategy"}],
+        agents=[AgentDefinition(name="TestAgent", role=AgentRole.STRATEGY)],
     )
 
 
@@ -111,7 +117,7 @@ class TestRunOnceAgentOrder:
         mock_call.side_effect = track_call
 
         config = _make_config(
-            products=[{"name": "MyApp", "workspace": str(workspace)}]
+            products=[ProductConfig(name="MyApp", workspace=str(workspace))]
         )
         scheduler = Scheduler(config)
         results = scheduler.run_once()
@@ -153,7 +159,7 @@ class TestRunOnceAgentOrder:
         )
 
         config = _make_config(
-            products=[{"name": "MyApp", "workspace": str(workspace)}]
+            products=[ProductConfig(name="MyApp", workspace=str(workspace))]
         )
         scheduler = Scheduler(config)
         results = scheduler.run_once()
@@ -188,7 +194,7 @@ class TestStatePersistence:
         mock_call.return_value = ""
 
         config = _make_config(
-            products=[{"name": "Prod", "workspace": str(workspace)}]
+            products=[ProductConfig(name="Prod", workspace=str(workspace))]
         )
         scheduler = Scheduler(config)
         scheduler.run_once()
@@ -216,7 +222,7 @@ class TestStatePersistence:
         mock_call.return_value = ""
 
         config = _make_config(
-            products=[{"name": "MyApp", "workspace": str(workspace)}]
+            products=[ProductConfig(name="MyApp", workspace=str(workspace))]
         )
         scheduler = Scheduler(config)
 

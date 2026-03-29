@@ -32,49 +32,30 @@ llm:
     strategy_agent: { model: claude-sonnet-4-6 }
 
 agents:
-  # Minimum viable company — 4 agents
-  - name: "Strategist"
-    role: strategy
-    class: crazypumpkin.agents.strategist.StrategistAgent
-    model: sonnet
-    group: execution
-    description: "Ingests goals, creates projects, breaks into tasks"
-
-  - name: "Developer"
+  # Canonical 3-agent roster
+  - name: "developer"
     role: execution
     class: crazypumpkin.agents.developer.DeveloperAgent
     model: sonnet
     group: execution
+    trigger: "backlog > 0"
     description: "Executes tasks — writes code, runs tests"
 
-  - name: "Reviewer"
+  - name: "reviewer"
     role: reviewer
     class: crazypumpkin.agents.reviewer.ReviewerAgent
     model: sonnet
     group: review
+    trigger: "submitted_for_review > 0"
     description: "Reviews submitted code for quality and correctness"
 
-  - name: "Ops"
-    role: ops
-    class: crazypumpkin.agents.ops.OpsAgent
-    model: none
-    group: operations
-    description: "Detects stuck tasks, resets failures (no LLM)"
-
-  # Add more agents as your company grows:
-  # - name: "Architect"
-  #   role: architect
-  #   class: crazypumpkin.agents.architect.ArchitectAgent
-  #   model: sonnet
-  #   group: execution
-  #   description: "Designs fixes for rejected tasks"
-  #
-  # - name: "Evolution"
-  #   role: evolution
-  #   class: crazypumpkin.agents.evolution.EvolutionAgent
-  #   model: sonnet
-  #   group: strategic
-  #   description: "Analyzes performance, proposes improvements"
+  - name: "strategist"
+    role: strategy
+    class: crazypumpkin.agents.strategist.StrategistAgent
+    model: sonnet
+    group: execution
+    trigger: "idle_products > 0"
+    description: "Ingests goals, creates projects, breaks into tasks"
 
 pipeline:
   cycle_interval: 30       # seconds between cycles

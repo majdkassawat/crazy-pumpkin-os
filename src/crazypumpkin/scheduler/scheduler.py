@@ -15,6 +15,7 @@ from crazypumpkin.framework.models import (
     Agent,
     AgentConfig,
     AgentRole,
+    ProductConfig,
     Task,
     TaskStatus,
 )
@@ -58,7 +59,7 @@ class Scheduler:
         results: dict[str, Any] = {}
 
         for product in self._config.products:
-            product_name = product.get("name", "unknown")
+            product_name = product.name or "unknown"
             try:
                 result = self._process_product(product)
                 results[product_name] = result
@@ -111,9 +112,9 @@ class Scheduler:
     # Internals
     # ------------------------------------------------------------------
 
-    def _process_product(self, product: dict[str, Any]) -> dict[str, Any]:
+    def _process_product(self, product: ProductConfig) -> dict[str, Any]:
         """Run the full pipeline for a single product."""
-        workspace = Path(product.get("workspace", "."))
+        workspace = Path(product.workspace or ".")
         data_dir = workspace / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
 
