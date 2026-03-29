@@ -31,6 +31,7 @@ Task = _models.Task
 TaskOutput = _models.TaskOutput
 TaskStatus = _models.TaskStatus
 
+AgentMetrics = _models.AgentMetrics
 Store = _store_mod.Store
 AgentRegistry = _registry_mod.AgentRegistry
 BaseAgent = _agent_mod.BaseAgent
@@ -194,6 +195,179 @@ class TestPersistence:
         s = Store(data_dir=None)
         s.add_project(Project(id="p1"))
         s.save()  # should not raise
+
+
+# ── Save/Load Round-Trip (all entity types) ─────────────────────────
+
+
+class TestSaveLoadRoundTrip:
+    """Full serialization round-trips: save → new Store → load → assert."""
+
+    def test_task_with_history_and_output(self, tmp_path):
+        history = [
+            {"from": "created", "to": "planned", "reason": "init",
+             "timestamp": "2026-01-01T00:00:00+00:00"},
+            {"from": "planned", "to": "assigned", "reason": "auto",
+             "timestamp": "2026-01-01T01:00:00+00:00"},
+        ]
+        output = TaskOutput(
+            content="result data",
+            artifacts={"main.py": "print(1)"},
+            metadata={"key": "val"},
+        )
+        task = Task(
+            id="t_rt", project_id="p1", title="Round-trip task",
+            description="desc", status=TaskStatus.ASSIGNED,
+            assigned_to="agent1", priority=2,
+            dependencies=["t0"], acceptance_criteria=["works"],
+            output=output, history=history,
+            goal_ancestry=["g1", "g2"], blocked_by="blocker1",
+        )
+
+        s = Store(data_dir=tmp_path)
+        s.add_task(task)
+        s.save()
+
+        s2 = Store(data_dir=tmp_path)
+        assert s2.load() is True
+        t = s2.get_task("t_rt")
+
+        assert t.id == "t_rt"
+        assert t.project_id == "p1"
+        assert t.title == "Round-trip task"
+        assert t.description == "desc"
+        assert t.status == TaskStatus.ASSIGNED
+        assert t.assigned_to == "agent1"
+        assert t.priority == 2
+        assert t.dependencies == ["t0"]
+        assert t.acceptance_criteria == ["works"]
+        assert t.output is not None
+        assert t.output.content == "result data"
+        assert t.output.artifacts == {"main.py": "print(1)"}
+        assert t.output.metadata == {"key": "val"}
+        assert len(t.history) == 2
+        assert t.history == history
+        assert t.goal_ancestry == ["g1", "g2"]
+        assert t.blocked_by == "blocker1"
+
+    def test_review_round_trip(self, tmp_path):
+        reviews = []
+        for i, decision in enumerate(ReviewDecision):
+            r = Review(
+                id=f"r{i}", task_id=f"t{i}", reviewer_id=f"agent{i}",
+                decision=decision,
+                feedback=f"feedback_{decision.value}",
+                criteria_results={"crit1": True, "crit2": False},
+                confidence=0.85,
+            )
+            reviews.append(r)
+
+        s = Store(data_dir=tmp_path)
+        for r in reviews:
+            s.add_review(r)
+        s.save()
+
+        s2 = Store(data_dir=tmp_path)
+        assert s2.load() is True
+
+        for orig in reviews:
+            loaded = s2.reviews[orig.id]
+            assert loaded.id == orig.id
+            assert loaded.task_id == orig.task_id
+            assert loaded.reviewer_id == orig.reviewer_id
+            assert loaded.decision == orig.decision
+            assert loaded.feedback == orig.feedback
+            assert loaded.criteria_results == orig.criteria_results
+            assert loaded.confidence == orig.confidence
+            assert loaded.created_at == orig.created_at
+
+    def test_approval_round_trip(self, tmp_path):
+        approvals = []
+        for i, status in enumerate(ApprovalStatus):
+            a = Approval(
+                id=f"a{i}", action=f"action_{i}", description=f"desc_{i}",
+                requested_by=f"agent_{i}", policy_id=f"pol_{i}",
+                status=status, decided_by=f"decider_{i}",
+                reason=f"reason_{i}",
+                decided_at="2026-01-01T00:00:00+00:00"
+                if status != ApprovalStatus.PENDING else "",
+            )
+            approvals.append(a)
+
+        s = Store(data_dir=tmp_path)
+        for a in approvals:
+            s.add_approval(a)
+        s.save()
+
+        s2 = Store(data_dir=tmp_path)
+        assert s2.load() is True
+
+        for orig in approvals:
+            loaded = s2.approvals[orig.id]
+            assert loaded.id == orig.id
+            assert loaded.action == orig.action
+            assert loaded.description == orig.description
+            assert loaded.requested_by == orig.requested_by
+            assert loaded.policy_id == orig.policy_id
+            assert loaded.status == orig.status
+            assert loaded.decided_by == orig.decided_by
+            assert loaded.reason == orig.reason
+            assert loaded.created_at == orig.created_at
+            assert loaded.decided_at == orig.decided_at
+
+    def test_proposal_round_trip(self, tmp_path):
+        cp = ChangeProposal(
+            id="cp_rt",
+            proposal_type=ProposalType.CHANGE_WORKFLOW,
+            title="Update workflow",
+            rationale="Improve throughput",
+            proposed_by="agent_evo",
+            status=ProposalStatus.PROPOSED,
+            changes={"workflow": {"old": "sequential", "new": "parallel"}},
+            metrics_before={"throughput": 10, "latency_ms": 500},
+        )
+
+        s = Store(data_dir=tmp_path)
+        s.add_proposal(cp)
+        s.save()
+
+        s2 = Store(data_dir=tmp_path)
+        assert s2.load() is True
+        loaded = s2.proposals["cp_rt"]
+
+        assert loaded.id == "cp_rt"
+        assert loaded.proposal_type == ProposalType.CHANGE_WORKFLOW
+        assert loaded.title == "Update workflow"
+        assert loaded.rationale == "Improve throughput"
+        assert loaded.proposed_by == "agent_evo"
+        assert loaded.status == ProposalStatus.PROPOSED
+        assert loaded.changes == {"workflow": {"old": "sequential", "new": "parallel"}}
+        assert loaded.metrics_before == {"throughput": 10, "latency_ms": 500}
+        assert loaded.created_at == cp.created_at
+
+    def test_agent_metrics_round_trip(self, tmp_path):
+        s = Store(data_dir=tmp_path)
+        s.record_task_outcome("ag1", "TestAgent", completed=True, retries=1,
+                              duration_sec=12.5, first_attempt=True)
+        s.record_task_outcome("ag1", "TestAgent", completed=False, retries=2,
+                              duration_sec=8.0, first_attempt=False)
+        s.record_llm_spend("ag1", 3.50)
+        s.save()
+
+        s2 = Store(data_dir=tmp_path)
+        assert s2.load() is True
+        metrics = s2.get_all_agent_metrics()
+        assert len(metrics) == 1
+        m = metrics[0]
+        assert m.agent_id == "ag1"
+        assert m.agent_name == "TestAgent"
+        assert m.tasks_completed == 1
+        assert m.tasks_rejected == 1
+        assert m.total_retries == 3
+        assert abs(m.total_duration_sec - 20.5) < 1e-9
+        assert m.first_attempt_accepted == 1
+        assert abs(m.budget_spent_usd - 3.50) < 1e-9
+        assert m.recent_outcomes == [True, False]
 
 
 # ── Compaction ───────────────────────────────────────────────────────
