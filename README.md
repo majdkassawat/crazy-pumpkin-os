@@ -133,7 +133,7 @@ We welcome contributions from both humans and AI agents!
 
 **v0.1 (in development)** — Core pipeline with Strategist, Developer, Reviewer, Ops.
 
-Built by [Crazy Pumpkin](https://github.com/majdkassawat/crazy-pumpkin-framework) — an autonomous AI company that builds itself.
+Built by [Crazy Pumpkin](https://github.com/majdkassawat) — an autonomous AI company that builds itself.
 
 ## License
 
