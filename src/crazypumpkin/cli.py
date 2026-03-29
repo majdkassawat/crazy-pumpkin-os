@@ -309,8 +309,21 @@ def cmd_run(args):
 
 
 def cmd_dashboard(args):
-    """Start the web dashboard."""
-    print("crazypumpkin dashboard — coming soon")
+    """Print a formatted observability dashboard to stdout."""
+    from crazypumpkin.framework.config import load_config
+    from crazypumpkin.dashboard.view import render_dashboard
+
+    config = load_config()
+    data_dir = Path.cwd() / "data"
+
+    store = None
+    try:
+        from crazypumpkin.framework.store import Store
+        store = Store(data_dir)
+    except Exception:
+        pass
+
+    print(render_dashboard(config, data_dir, store=store))
 
 
 def cmd_goal(args):
