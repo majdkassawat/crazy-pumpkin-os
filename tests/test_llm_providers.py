@@ -42,6 +42,18 @@ class MockLLMProvider(LLMProvider):
         self.last_prompt = prompt
         return {"mock": True, "prompt": prompt}
 
+    def call_multi_turn(
+        self,
+        prompt: str,
+        *,
+        max_turns: int = 10,
+        tools: list | None = None,
+        timeout: float | None = None,
+        cwd: str | None = None,
+    ) -> str:
+        self.last_prompt = prompt
+        return f"mock-multi-turn:{prompt}"
+
 
 # ---------------------------------------------------------------------------
 # MockLLMProvider tests
@@ -74,6 +86,34 @@ class TestMockLLMProvider:
         provider = MockLLMProvider()
         result = provider.call_json("hi", model="test-model")
         assert isinstance(result, (dict, list))
+
+    def test_call_multi_turn_returns_str(self):
+        """MockLLMProvider.call_multi_turn satisfies the LLMProvider contract."""
+        provider = MockLLMProvider()
+        result = provider.call_multi_turn("hello")
+        assert isinstance(result, str)
+        assert result == "mock-multi-turn:hello"
+
+    def test_call_multi_turn_accepts_all_kwargs(self):
+        """MockLLMProvider.call_multi_turn accepts every kwarg from the base class."""
+        provider = MockLLMProvider()
+        tools = [{"name": "Read", "description": "Read"}]
+        result = provider.call_multi_turn(
+            "prompt",
+            max_turns=5,
+            tools=tools,
+            timeout=30.0,
+            cwd="/tmp",
+        )
+        assert isinstance(result, str)
+        assert provider.last_prompt == "prompt"
+
+    def test_call_multi_turn_ignores_max_turns(self):
+        """MockLLMProvider always returns immediately regardless of max_turns."""
+        provider = MockLLMProvider()
+        for turns in (1, 5, 100):
+            result = provider.call_multi_turn("go", max_turns=turns)
+            assert result == "mock-multi-turn:go"
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +389,35 @@ class TestAnthropicProvider:
         provider = AnthropicProvider()
         assert provider._resolve_model("my-custom-model") == "my-custom-model"
 
+    # -- call() timeout forwarding ---------------------------------------------
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_call_forwards_timeout(self, mock_cls):
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response("ok")
+
+        provider.call("hello", timeout=42.0)
+
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args.kwargs
+        assert call_kwargs["timeout"] == 42.0
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_call_omits_timeout_when_none(self, mock_cls):
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response("ok")
+
+        provider.call("hello")
+
+        call_kwargs = mock_create.call_args.kwargs
+        assert "timeout" not in call_kwargs
+
     # -- call() ----------------------------------------------------------------
 
     @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
@@ -383,6 +452,292 @@ class TestAnthropicProvider:
 
         assert isinstance(result, dict)
         assert result == payload
+
+    # -- call_json() timeout forwarding ----------------------------------------
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_call_json_forwards_timeout(self, mock_cls):
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response('{"ok": true}')
+
+        provider.call_json("give me json", timeout=30.0)
+
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args.kwargs
+        assert call_kwargs["timeout"] == 30.0
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_call_json_omits_timeout_when_none(self, mock_cls):
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response('{"ok": true}')
+
+        provider.call_json("give me json")
+
+        call_kwargs = mock_create.call_args.kwargs
+        assert "timeout" not in call_kwargs
+
+    # -- call_multi_turn() -----------------------------------------------------
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_no_tools_falls_back_to_call(self, mock_cls):
+        """When tools is None, call_multi_turn delegates to single-turn call()."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response("single turn answer")
+
+        result = provider.call_multi_turn("hello")
+
+        assert result == "single turn answer"
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_single_text_response(self, mock_cls):
+        """Model responds with text only (stop_reason='end_turn') → returns immediately."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        resp = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="done")],
+            stop_reason="end_turn",
+        )
+        mock_create.return_value = resp
+
+        tools = [{"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}}]
+        result = provider.call_multi_turn("do something", tools=tools)
+
+        assert result == "done"
+        assert mock_create.call_count == 1
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_tool_use_loop(self, mock_cls):
+        """Model issues a tool_use, gets result, then responds with text."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+
+        # Turn 1: model requests tool use
+        tool_block = SimpleNamespace(
+            type="tool_use", id="tu_1", name="Read",
+            input={"file_path": "/tmp/test.txt"},
+        )
+        turn1 = SimpleNamespace(
+            content=[tool_block],
+            stop_reason="tool_use",
+        )
+        # Turn 2: model responds with text
+        turn2 = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="file contents are xyz")],
+            stop_reason="end_turn",
+        )
+        mock_create.side_effect = [turn1, turn2]
+
+        tools = [{"name": "Read", "description": "Read", "input_schema": {"type": "object", "properties": {}}}]
+        result = provider.call_multi_turn("read the file", tools=tools)
+
+        assert "file contents are xyz" in result
+        assert mock_create.call_count == 2
+
+        # Verify tool_result was sent back (index 2 = tool_result message,
+        # since messages is [user, assistant(turn1), user(tool_results), ...])
+        second_call_messages = mock_create.call_args_list[1].kwargs["messages"]
+        tool_result_msg = second_call_messages[2]
+        assert tool_result_msg["role"] == "user"
+        assert tool_result_msg["content"][0]["type"] == "tool_result"
+        assert tool_result_msg["content"][0]["tool_use_id"] == "tu_1"
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_max_turns_terminates(self, mock_cls):
+        """Loop stops after max_turns even if model keeps requesting tools."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+
+        tool_block = SimpleNamespace(
+            type="tool_use", id="tu_loop", name="Bash",
+            input={"command": "echo hi"},
+        )
+        # Every turn requests more tools
+        mock_create.return_value = SimpleNamespace(
+            content=[tool_block],
+            stop_reason="tool_use",
+        )
+
+        tools = [{"name": "Bash", "description": "Run", "input_schema": {"type": "object", "properties": {}}}]
+        result = provider.call_multi_turn("loop", tools=tools, max_turns=3)
+
+        assert isinstance(result, str)
+        assert mock_create.call_count == 3
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_custom_tool_executor(self, mock_cls):
+        """tool_executor callback receives tool name and input, returns result."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+
+        tool_block = SimpleNamespace(
+            type="tool_use", id="tu_exec", name="Read",
+            input={"file_path": "/etc/hosts"},
+        )
+        turn1 = SimpleNamespace(content=[tool_block], stop_reason="tool_use")
+        turn2 = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="got it")],
+            stop_reason="end_turn",
+        )
+        mock_create.side_effect = [turn1, turn2]
+
+        executor_calls = []
+
+        def executor(name, inp):
+            executor_calls.append((name, inp))
+            return "127.0.0.1 localhost"
+
+        tools = [{"name": "Read", "description": "Read", "input_schema": {"type": "object", "properties": {}}}]
+        result = provider.call_multi_turn("read hosts", tools=tools, tool_executor=executor)
+
+        assert result == "got it"
+        assert len(executor_calls) == 1
+        assert executor_calls[0] == ("Read", {"file_path": "/etc/hosts"})
+
+        # Verify the executor result was sent back as tool_result content
+        second_call_messages = mock_create.call_args_list[1].kwargs["messages"]
+        tool_result_content = second_call_messages[2]["content"][0]["content"]
+        assert tool_result_content == "127.0.0.1 localhost"
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_empty_tools_list_falls_back(self, mock_cls):
+        """Empty tools list behaves the same as None — single-turn fallback."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response("fallback")
+
+        result = provider.call_multi_turn("hello", tools=[])
+
+        assert result == "fallback"
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_forwards_timeout(self, mock_cls):
+        """timeout kwarg is forwarded to every Anthropic messages.create call in the loop."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+
+        tool_block = SimpleNamespace(
+            type="tool_use", id="tu_t", name="Bash",
+            input={"command": "ls"},
+        )
+        turn1 = SimpleNamespace(content=[tool_block], stop_reason="tool_use")
+        turn2 = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="done")],
+            stop_reason="end_turn",
+        )
+        mock_create.side_effect = [turn1, turn2]
+
+        tools = [{"name": "Bash", "description": "Run", "input_schema": {"type": "object", "properties": {}}}]
+        provider.call_multi_turn("go", tools=tools, timeout=99.0)
+
+        assert mock_create.call_count == 2
+        for call_args in mock_create.call_args_list:
+            assert call_args.kwargs["timeout"] == 99.0
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_multiple_tool_blocks_dispatched(self, mock_cls):
+        """When a single response contains multiple tool_use blocks, all are dispatched."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+
+        block_a = SimpleNamespace(type="tool_use", id="tu_a", name="Read", input={"file_path": "a.txt"})
+        block_b = SimpleNamespace(type="tool_use", id="tu_b", name="Grep", input={"pattern": "foo"})
+        turn1 = SimpleNamespace(content=[block_a, block_b], stop_reason="tool_use")
+        turn2 = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="both done")],
+            stop_reason="end_turn",
+        )
+        mock_create.side_effect = [turn1, turn2]
+
+        dispatched = []
+
+        def executor(name, inp):
+            dispatched.append(name)
+            return f"result-{name}"
+
+        tools = [
+            {"name": "Read", "description": "Read", "input_schema": {"type": "object", "properties": {}}},
+            {"name": "Grep", "description": "Grep", "input_schema": {"type": "object", "properties": {}}},
+        ]
+        result = provider.call_multi_turn("go", tools=tools, tool_executor=executor)
+
+        assert result == "both done"
+        assert dispatched == ["Read", "Grep"]
+
+        # Both tool_result messages sent back
+        second_call_messages = mock_create.call_args_list[1].kwargs["messages"]
+        tool_results_msg = second_call_messages[2]  # user message with tool_results
+        assert tool_results_msg["role"] == "user"
+        result_ids = {r["tool_use_id"] for r in tool_results_msg["content"]}
+        assert result_ids == {"tu_a", "tu_b"}
+        result_contents = {r["content"] for r in tool_results_msg["content"]}
+        assert result_contents == {"result-Read", "result-Grep"}
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_end_turn_exits_immediately(self, mock_cls):
+        """stop_reason='end_turn' on first response exits the loop with one API call."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="immediate answer")],
+            stop_reason="end_turn",
+        )
+
+        tools = [{"name": "Read", "description": "Read", "input_schema": {"type": "object", "properties": {}}}]
+        result = provider.call_multi_turn("question", tools=tools, max_turns=10)
+
+        assert result == "immediate answer"
+        assert mock_create.call_count == 1
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_multi_turn_max_turns_exact_count(self, mock_cls):
+        """Anthropic client is called exactly max_turns times when model always requests tools."""
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+
+        tool_block = SimpleNamespace(
+            type="tool_use", id="tu_x", name="Bash",
+            input={"command": "echo"},
+        )
+        mock_create.return_value = SimpleNamespace(
+            content=[tool_block],
+            stop_reason="tool_use",
+        )
+
+        tools = [{"name": "Bash", "description": "Run", "input_schema": {"type": "object", "properties": {}}}]
+
+        for max_t in (1, 2, 5):
+            mock_create.reset_mock()
+            provider.call_multi_turn("loop", tools=tools, max_turns=max_t)
+            assert mock_create.call_count == max_t, (
+                f"Expected exactly {max_t} API calls, got {mock_create.call_count}"
+            )
 
 
 # ---------------------------------------------------------------------------

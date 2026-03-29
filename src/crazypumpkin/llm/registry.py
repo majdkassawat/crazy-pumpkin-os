@@ -107,6 +107,37 @@ class ProviderRegistry:
         effective_model = model if model is not None else agent_model
         return provider.call(prompt, model=effective_model, timeout=timeout, cwd=cwd, tools=tools)
 
+    def call_multi_turn(
+        self,
+        prompt: str,
+        *,
+        agent: str | None = None,
+        agent_config: AgentConfig | None = None,
+        model: str | None = None,
+        max_turns: int = 10,
+        timeout: float | None = None,
+        cwd: str | None = None,
+        tools: list | None = None,
+    ) -> str:
+        """Dispatch a multi-turn agentic call to the provider assigned to *agent*.
+
+        When *model* is provided it takes precedence over the model
+        returned by the ``agent_models`` lookup.
+
+        Raises ``BudgetExceededError`` if the agent has exceeded its
+        monthly budget cap.
+        """
+        self._check_budget(agent, agent_config)
+        provider, agent_model = self.get_provider(agent)
+        effective_model = model if model is not None else agent_model
+        return provider.call_multi_turn(
+            prompt,
+            max_turns=max_turns,
+            tools=tools,
+            timeout=timeout,
+            cwd=cwd,
+        )
+
     def call_json(
         self,
         prompt: str,
