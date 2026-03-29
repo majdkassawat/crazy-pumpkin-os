@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from crazypumpkin.framework.models import AuditEvent, _now, _uid
+from crazypumpkin.notifications import notify as _notify
 
 logger = logging.getLogger("crazypumpkin.events")
 
@@ -78,6 +79,16 @@ class EventBus:
             handler(event)
         for handler in self._handlers.get(action, []):
             handler(event)
+
+        # Console notification for lifecycle events.
+        _notify({
+            "action": event.action,
+            "timestamp": event.timestamp,
+            "entity_type": event.entity_type,
+            "entity_id": event.entity_id,
+            "agent_id": event.agent_id,
+            "detail": event.detail,
+        })
 
         return event
 
