@@ -71,6 +71,7 @@ class OpenAIProvider(LLMProvider):
         tools: list | None = None,
         system: str | None = None,
         cache: bool = True,
+        agent: str | None = None,
     ) -> str:
         resolved = self._resolve_model(model)
         kwargs: dict = {
@@ -133,6 +134,7 @@ class OpenAIProvider(LLMProvider):
 
     def call_json(self, prompt: str, **kwargs: object) -> dict | list:
         resolved = self._resolve_model(kwargs.pop("model", None))  # type: ignore[arg-type]
+        kwargs.pop("agent", None)
         response = self._client.chat.completions.create(
             model=resolved,
             messages=[{"role": "user", "content": prompt}],

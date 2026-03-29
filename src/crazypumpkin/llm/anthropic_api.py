@@ -103,6 +103,7 @@ class AnthropicProvider(LLMProvider):
         tools: list | None = None,
         system: str | None = None,
         cache: bool = True,
+        agent: str | None = None,
     ) -> str:
         resolved = self._resolve_model(model)
         kwargs: dict = {
@@ -168,6 +169,7 @@ class AnthropicProvider(LLMProvider):
         timeout = kwargs.pop("timeout", None)
         system = kwargs.pop("system", None)
         cache = kwargs.pop("cache", True)
+        kwargs.pop("agent", None)
         create_kwargs: dict = {
             "model": resolved,
             "max_tokens": 4096,
@@ -194,6 +196,7 @@ class AnthropicProvider(LLMProvider):
         tool_executor: object | None = None,
         system: str | None = None,
         cache: bool = True,
+        agent: str | None = None,
     ) -> str:
         """Run an agentic conversation loop until the model stops issuing tool calls or *max_turns* is reached.
 

@@ -105,6 +105,7 @@ class LLMProvider(ABC):
         tools: list | None = None,
         system: str | None = None,
         cache: bool = True,
+        agent: str | None = None,
     ) -> str: ...
 
     @abstractmethod
@@ -121,5 +122,6 @@ class LLMProvider(ABC):
         cwd: str | None = None,
         system: str | None = None,
         cache: bool = True,
+        agent: str | None = None,
     ) -> str:
         """Run an agentic conversation loop until the model stops issuing tool calls or *max_turns* is reached."""

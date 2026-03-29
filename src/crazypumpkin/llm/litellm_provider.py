@@ -40,6 +40,7 @@ class LiteLLMProvider(LLMProvider):
         timeout: float | None = None,
         cwd: str | None = None,
         tools: list | None = None,
+        agent: str | None = None,
     ) -> str:
         """Call the LLM and return the text response."""
         resolved = self._resolve_model(model)
@@ -51,17 +52,23 @@ class LiteLLMProvider(LLMProvider):
             kwargs["timeout"] = timeout
         if tools:
             kwargs["tools"] = tools
+        if agent is not None:
+            kwargs["metadata"] = {"generation_name": agent, "trace_name": agent}
         response = litellm.completion(**kwargs)
         return response.choices[0].message.content or ""
 
     def call_json(self, prompt: str, **kwargs: object) -> dict | list:
         """Call the LLM and parse the response as JSON."""
         resolved = self._resolve_model(kwargs.pop("model", None))  # type: ignore[arg-type]
-        response = litellm.completion(
-            model=resolved,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-        )
+        agent = kwargs.pop("agent", None)
+        completion_kwargs: dict = {
+            "model": resolved,
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_object"},
+        }
+        if agent is not None:
+            completion_kwargs["metadata"] = {"generation_name": agent, "trace_name": agent}
+        response = litellm.completion(**completion_kwargs)
         text = response.choices[0].message.content or "{}"
         return json.loads(text)
 
@@ -73,6 +80,7 @@ class LiteLLMProvider(LLMProvider):
         tools: list | None = None,
         timeout: float | None = None,
         cwd: str | None = None,
+        agent: str | None = None,
     ) -> str:
         """Single-turn fallback until agentic loop is implemented."""
-        return self.call(prompt, model=None, timeout=timeout, cwd=cwd, tools=tools)
+        return self.call(prompt, model=None, timeout=timeout, cwd=cwd, tools=tools, agent=agent)
