@@ -116,7 +116,7 @@ def test_product_has_required_fields(raw_config):
 def test_product_fields_after_load(loaded_config):
     """Product fields survive load_config processing."""
     product = loaded_config.products[0]
-    assert product["name"] == "MyApp"
-    assert product["test_command"] == "python -m pytest tests/ -v --tb=short"
-    assert product["git_branch"] == "main"
-    assert Path(product["workspace"]).is_absolute()
+    assert product.name == "MyApp"
+    assert product.test_command == "python -m pytest tests/ -v --tb=short"
+    assert product.git_branch == "main"
+    assert Path(product.workspace).is_absolute()

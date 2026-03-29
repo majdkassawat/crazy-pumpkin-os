@@ -7,6 +7,7 @@ from typing import Any
 
 import yaml
 
+from .models import AgentDefinition, AgentRole, ProductConfig
 from .paths import get_project_root, resolve_path
 
 
@@ -29,9 +30,9 @@ def _expand_vars(value: Any) -> Any:
 class Config:
     """Typed, validated configuration object."""
     company: dict[str, Any] = field(default_factory=dict)
-    products: list[dict[str, Any]] = field(default_factory=list)
+    products: list[ProductConfig] = field(default_factory=list)
     llm: dict[str, Any] = field(default_factory=dict)
-    agents: list[dict[str, Any]] = field(default_factory=list)
+    agents: list[AgentDefinition] = field(default_factory=list)
     pipeline: dict[str, Any] = field(default_factory=dict)
     notifications: dict[str, Any] = field(default_factory=dict)
     dashboard: dict[str, Any] = field(default_factory=dict)
@@ -47,20 +48,57 @@ def _validate_and_build(raw: dict, project_root: Path) -> Config:
         raise ValueError("company.name is missing or empty")
 
     # products
-    products = raw.get("products")
-    if not products:
+    products_raw = raw.get("products")
+    if not products_raw:
         raise ValueError("products list is absent or empty")
 
+    parsed_products: list[ProductConfig] = []
+    for i, p in enumerate(products_raw):
+        pname = p.get("name")
+        if not pname or not str(pname).strip():
+            raise ValueError(f"products[{i}].name is missing or empty")
+        pworkspace = p.get("workspace")
+        if not pworkspace or not str(pworkspace).strip():
+            raise ValueError(f"products[{i}].workspace is missing or empty")
+        resolved_ws = str(resolve_path(pworkspace, project_root))
+        parsed_products.append(ProductConfig(
+            name=str(pname),
+            workspace=resolved_ws,
+            source_dir=p.get("source_dir", "src"),
+            test_dir=p.get("test_dir", "tests"),
+            test_command=p.get("test_command", ""),
+            git_branch=p.get("git_branch", "main"),
+            auto_pm=bool(p.get("auto_pm", False)),
+        ))
+
     # agents
-    agents = raw.get("agents")
-    if not agents:
+    agents_raw = raw.get("agents")
+    if not agents_raw:
         raise ValueError("agents list is absent or empty")
 
-    # Resolve product workspace paths
-    for product in products:
-        ws = product.get("workspace")
-        if ws:
-            product["workspace"] = str(resolve_path(ws, project_root))
+    parsed_agents: list[AgentDefinition] = []
+    for i, a in enumerate(agents_raw):
+        aname = a.get("name")
+        if not aname or not str(aname).strip():
+            raise ValueError(f"agents[{i}].name is missing or empty")
+        arole = a.get("role")
+        if not arole or not str(arole).strip():
+            raise ValueError(f"agents[{i}].role is missing or empty")
+        try:
+            role_enum = AgentRole(str(arole))
+        except ValueError:
+            raise ValueError(
+                f"agents[{i}].role '{arole}' is not a valid AgentRole"
+            )
+        parsed_agents.append(AgentDefinition(
+            name=str(aname),
+            role=role_enum,
+            description=a.get("description", ""),
+            model=a.get("model", ""),
+            group=a.get("group", ""),
+            trigger=a.get("trigger", ""),
+            class_path=a.get("class", ""),
+        ))
 
     # pipeline defaults
     pipeline = raw.get("pipeline") or {}
@@ -69,9 +107,9 @@ def _validate_and_build(raw: dict, project_root: Path) -> Config:
 
     return Config(
         company=company,
-        products=products,
+        products=parsed_products,
         llm=raw.get("llm") or {},
-        agents=agents,
+        agents=parsed_agents,
         pipeline=pipeline,
         notifications=raw.get("notifications") or {},
         dashboard=raw.get("dashboard") or {},

@@ -269,7 +269,7 @@ def test_empty_agents_raises(tmp_path):
 def test_workspace_resolved_relative_to_project_root(tmp_path):
     _write_config(tmp_path, _minimal_valid())
     cfg = load_config(tmp_path)
-    resolved = Path(cfg.products[0]["workspace"])
+    resolved = Path(cfg.products[0].workspace)
     assert resolved.is_absolute()
     assert "products" in str(resolved)
 
@@ -280,7 +280,7 @@ def test_absolute_workspace_unchanged(tmp_path):
     data["products"][0]["workspace"] = abs_path
     _write_config(tmp_path, data)
     cfg = load_config(tmp_path)
-    assert Path(cfg.products[0]["workspace"]).is_absolute()
+    assert Path(cfg.products[0].workspace).is_absolute()
 
 
 # -- missing config file -------------------------------------------------------
@@ -315,8 +315,8 @@ def test_full_config_roundtrip_from_example(tmp_path, monkeypatch):
 
     # Products
     assert len(cfg.products) >= 1
-    assert cfg.products[0]["name"] == "MyApp"
-    assert Path(cfg.products[0]["workspace"]).is_absolute()
+    assert cfg.products[0].name == "MyApp"
+    assert Path(cfg.products[0].workspace).is_absolute()
 
     # LLM — env var was expanded
     assert cfg.llm["default_provider"] == "anthropic_api"
@@ -325,7 +325,7 @@ def test_full_config_roundtrip_from_example(tmp_path, monkeypatch):
 
     # Agents — canonical 3-agent roster
     assert len(cfg.agents) == 3
-    agent_names = {a["name"] for a in cfg.agents}
+    agent_names = {a.name for a in cfg.agents}
     assert {"strategist", "developer", "reviewer"} == agent_names
 
     # Pipeline
