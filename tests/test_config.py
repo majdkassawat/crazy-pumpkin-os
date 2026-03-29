@@ -20,10 +20,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 _config_mod = importlib.import_module("crazypumpkin.framework.config")
 _paths_mod = importlib.import_module("crazypumpkin.framework.paths")
 
+_models_mod = importlib.import_module("crazypumpkin.framework.models")
+
 Config = _config_mod.Config
 load_config = _config_mod.load_config
 get_project_root = _paths_mod.get_project_root
 resolve_path = _paths_mod.resolve_path
+ProductConfig = _models_mod.ProductConfig
+AgentDefinition = _models_mod.AgentDefinition
+AgentRole = _models_mod.AgentRole
 
 
 def _write_config(tmp_path: Path, data: dict) -> Path:
@@ -337,3 +342,85 @@ def test_full_config_roundtrip_from_example(tmp_path, monkeypatch):
 
     # Voice
     assert cfg.voice["enabled"] is False
+
+
+# -- typed ProductConfig parsing -----------------------------------------------
+
+
+def test_products_parsed_into_product_config(tmp_path):
+    """Valid products are parsed into ProductConfig instances with correct fields."""
+    data = _minimal_valid()
+    data["products"] = [
+        {"name": "webapp", "workspace": "./products/webapp", "test_command": "pytest", "git_branch": "develop"},
+    ]
+    _write_config(tmp_path, data)
+    cfg = load_config(tmp_path)
+    p = cfg.products[0]
+    assert isinstance(p, ProductConfig)
+    assert p.name == "webapp"
+    assert Path(p.workspace).is_absolute()
+    assert p.test_command == "pytest"
+    assert p.git_branch == "develop"
+
+
+def test_missing_product_name_raises(tmp_path):
+    """A product entry without a name raises ValueError."""
+    data = _minimal_valid()
+    data["products"] = [{"workspace": "./products/x"}]
+    _write_config(tmp_path, data)
+    with pytest.raises(ValueError, match="name"):
+        load_config(tmp_path)
+
+
+def test_missing_product_workspace_raises(tmp_path):
+    """A product entry without a workspace raises ValueError."""
+    data = _minimal_valid()
+    data["products"] = [{"name": "nowork"}]
+    _write_config(tmp_path, data)
+    with pytest.raises(ValueError, match="workspace"):
+        load_config(tmp_path)
+
+
+# -- typed AgentDefinition parsing ---------------------------------------------
+
+
+def test_agents_parsed_into_agent_definition(tmp_path):
+    """Valid agents are parsed into AgentDefinition with correct role enum and trigger."""
+    data = _minimal_valid()
+    data["agents"] = [
+        {"name": "Strategist", "role": "strategy", "trigger": "backlog > 0"},
+    ]
+    _write_config(tmp_path, data)
+    cfg = load_config(tmp_path)
+    a = cfg.agents[0]
+    assert isinstance(a, AgentDefinition)
+    assert a.name == "Strategist"
+    assert a.role is AgentRole.STRATEGY
+    assert a.trigger == "backlog > 0"
+
+
+def test_missing_agent_name_raises(tmp_path):
+    """An agent entry without a name raises ValueError."""
+    data = _minimal_valid()
+    data["agents"] = [{"role": "execution"}]
+    _write_config(tmp_path, data)
+    with pytest.raises(ValueError, match="name"):
+        load_config(tmp_path)
+
+
+def test_invalid_agent_role_raises(tmp_path):
+    """An agent with an unrecognised role string raises ValueError."""
+    data = _minimal_valid()
+    data["agents"] = [{"name": "Bad", "role": "nonexistent_role"}]
+    _write_config(tmp_path, data)
+    with pytest.raises(ValueError, match="role"):
+        load_config(tmp_path)
+
+
+def test_agent_trigger_defaults_to_empty(tmp_path):
+    """When trigger is omitted from an agent entry it defaults to empty string."""
+    data = _minimal_valid()
+    data["agents"] = [{"name": "Dev", "role": "execution"}]
+    _write_config(tmp_path, data)
+    cfg = load_config(tmp_path)
+    assert cfg.agents[0].trigger == ""
