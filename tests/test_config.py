@@ -323,10 +323,10 @@ def test_full_config_roundtrip_from_example(tmp_path, monkeypatch):
     providers = cfg.llm["providers"]["anthropic_api"]
     assert providers["api_key"] == "test-key-123"
 
-    # Agents
-    assert len(cfg.agents) >= 4
+    # Agents — canonical 3-agent roster
+    assert len(cfg.agents) == 3
     agent_names = {a["name"] for a in cfg.agents}
-    assert {"Strategist", "Developer", "Reviewer", "Ops"} <= agent_names
+    assert {"strategist", "developer", "reviewer"} == agent_names
 
     # Pipeline
     assert cfg.pipeline["cycle_interval"] == 30
