@@ -4,6 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from crazypumpkin.framework.models import DeliveryConfig, DeliveryMode
 from crazypumpkin.framework.subprocess_util import run
 
 
@@ -114,3 +115,103 @@ def commit_and_push(
         raise RuntimeError(
             f"git push failed (exit {result.returncode}): {result.stderr}"
         )
+
+
+def deliver(
+    worktree_path: str,
+    config: DeliveryConfig,
+    title: str,
+    body: str,
+) -> str:
+    """Deliver committed work via PR or direct push.
+
+    Args:
+        worktree_path: Path to the git worktree with committed changes.
+        config: Delivery configuration controlling the mode.
+        title: PR title (used only in pull_request mode).
+        body: PR body text (used only in pull_request mode).
+
+    Returns:
+        The URL of the created PR (pull_request mode) or the pushed branch name (direct_push mode).
+
+    Raises:
+        RuntimeError: If any git or gh command fails.
+    """
+    if config.delivery_mode == DeliveryMode.PULL_REQUEST:
+        return _deliver_pull_request(worktree_path, title, body)
+    elif config.delivery_mode == DeliveryMode.DIRECT_PUSH:
+        return _deliver_direct_push(worktree_path)
+    else:
+        raise ValueError(f"Unknown delivery mode: {config.delivery_mode!r}")
+
+
+def _deliver_pull_request(worktree_path: str, title: str, body: str) -> str:
+    """Create a pull request using the ``gh`` CLI."""
+    # Detect the current branch to use as --head
+    branch_cmd = ["git", "rev-parse", "--abbrev-ref", "HEAD"]
+    result = run(branch_cmd, cwd=worktree_path)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git rev-parse failed (exit {result.returncode}): {result.stderr}"
+        )
+    head_branch = result.stdout.strip()
+
+    pr_cmd = [
+        "gh", "pr", "create",
+        "--title", title,
+        "--body", body,
+        "--head", head_branch,
+    ]
+    result = run(pr_cmd, cwd=worktree_path)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"gh pr create failed (exit {result.returncode}): {result.stderr}"
+        )
+    return result.stdout.strip()
+
+
+def _deliver_direct_push(worktree_path: str) -> str:
+    """Merge the current branch into the default branch and push."""
+    # Detect the current feature branch
+    branch_cmd = ["git", "rev-parse", "--abbrev-ref", "HEAD"]
+    result = run(branch_cmd, cwd=worktree_path)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git rev-parse failed (exit {result.returncode}): {result.stderr}"
+        )
+    feature_branch = result.stdout.strip()
+
+    # Detect the default branch via the remote HEAD
+    default_cmd = ["git", "rev-parse", "--abbrev-ref", "origin/HEAD"]
+    result = run(default_cmd, cwd=worktree_path)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Failed to detect default branch (exit {result.returncode}): {result.stderr}"
+        )
+    default_branch = result.stdout.strip().removeprefix("origin/")
+
+    # Checkout the default branch
+    checkout_cmd = ["git", "checkout", default_branch]
+    result = run(checkout_cmd, cwd=worktree_path)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git checkout failed (exit {result.returncode}): {result.stderr}"
+        )
+
+    # Merge the feature branch
+    merge_cmd = ["git", "merge", feature_branch]
+    result = run(merge_cmd, cwd=worktree_path)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git merge failed (exit {result.returncode}): {result.stderr}"
+        )
+
+    # Push the default branch
+    push_cmd = ["git", "push", "origin", default_branch]
+    result = run(push_cmd, cwd=worktree_path)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git push failed (exit {result.returncode}): {result.stderr}"
+        )
+
+    return default_branch
