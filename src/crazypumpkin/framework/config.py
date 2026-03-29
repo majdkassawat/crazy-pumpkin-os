@@ -183,6 +183,7 @@ def _validate_and_build(raw: dict, project_root: Path) -> Config:
             model=a.get("model", ""),
             group=a.get("group", ""),
             trigger=a.get("trigger", ""),
+            cooldown_seconds=int(a.get("cooldown_seconds", 0)),
             class_path=a.get("class", ""),
         ))
 
