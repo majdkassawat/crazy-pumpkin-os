@@ -54,3 +54,63 @@ def create_worktree(
         )
 
     return str(Path(worktree_path).resolve())
+
+
+def commit_and_push(
+    worktree_path: str,
+    files: list[str],
+    commit_message: str,
+    author_name: str,
+    author_email: str,
+    remote: str = "origin",
+) -> None:
+    """Stage files, commit with author attribution, and push the branch.
+
+    Args:
+        worktree_path: Path to the git worktree directory.
+        files: List of file paths (relative to worktree) to stage.
+        commit_message: Commit message text.
+        author_name: Name for the ``--author`` git flag.
+        author_email: Email for the ``--author`` git flag.
+        remote: Git remote name to push to (default ``origin``).
+
+    Raises:
+        RuntimeError: If any git command (add, commit, or push) fails.
+    """
+    # Stage files
+    add_cmd = ["git", "add", "--"] + list(files)
+    result = run(add_cmd, cwd=worktree_path)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git add failed (exit {result.returncode}): {result.stderr}"
+        )
+
+    # Commit with author attribution
+    author = f"{author_name} <{author_email}>"
+    commit_cmd = [
+        "git", "commit",
+        "--author", author,
+        "-m", commit_message,
+    ]
+    result = run(commit_cmd, cwd=worktree_path)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git commit failed (exit {result.returncode}): {result.stderr}"
+        )
+
+    # Detect current branch
+    branch_cmd = ["git", "rev-parse", "--abbrev-ref", "HEAD"]
+    result = run(branch_cmd, cwd=worktree_path)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git rev-parse failed (exit {result.returncode}): {result.stderr}"
+        )
+    branch = result.stdout.strip()
+
+    # Push to remote
+    push_cmd = ["git", "push", remote, branch]
+    result = run(push_cmd, cwd=worktree_path)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git push failed (exit {result.returncode}): {result.stderr}"
+        )

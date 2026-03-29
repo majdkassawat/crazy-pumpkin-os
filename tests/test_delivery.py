@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from crazypumpkin.framework.delivery import create_worktree
+from crazypumpkin.framework.delivery import commit_and_push, create_worktree
 
 
 # --- validation tests ---
@@ -102,3 +102,114 @@ class TestGitWorktreeCommand:
             create_worktree(str(tmp_path), "agent/p/t", str(base))
 
         assert base.exists()
+
+
+# --- commit_and_push tests ---
+
+class TestCommitAndPush:
+    """commit_and_push stages, commits with author, and pushes."""
+
+    def _ok(self, **overrides):
+        defaults = {"args": [], "returncode": 0, "stdout": "main\n", "stderr": ""}
+        defaults.update(overrides)
+        return subprocess.CompletedProcess(**defaults)
+
+    def _fail(self, **overrides):
+        defaults = {"args": [], "returncode": 1, "stdout": "", "stderr": "fatal: error"}
+        defaults.update(overrides)
+        return subprocess.CompletedProcess(**defaults)
+
+    def test_stages_commits_and_pushes(self, tmp_path):
+        """Happy path: all three git commands succeed."""
+        with mock.patch("crazypumpkin.framework.delivery.run") as mocked:
+            mocked.return_value = self._ok()
+            commit_and_push(
+                str(tmp_path), ["a.py", "b.py"],
+                "feat: add stuff", "Bot", "bot@example.com", "origin",
+            )
+            assert mocked.call_count == 4  # add, commit, rev-parse, push
+
+    def test_git_add_command(self, tmp_path):
+        """git add is called with the correct files."""
+        with mock.patch("crazypumpkin.framework.delivery.run") as mocked:
+            mocked.return_value = self._ok()
+            commit_and_push(
+                str(tmp_path), ["x.py"],
+                "msg", "A", "a@b.com",
+            )
+            add_call = mocked.call_args_list[0]
+            cmd = add_call[0][0]
+            assert cmd[:3] == ["git", "add", "--"]
+            assert "x.py" in cmd
+
+    def test_commit_uses_author_flag(self, tmp_path):
+        """git commit includes --author with correct format."""
+        with mock.patch("crazypumpkin.framework.delivery.run") as mocked:
+            mocked.return_value = self._ok()
+            commit_and_push(
+                str(tmp_path), ["f.py"],
+                "msg", "Nova", "nova@cp.dev",
+            )
+            commit_call = mocked.call_args_list[1]
+            cmd = commit_call[0][0]
+            assert "--author" in cmd
+            idx = cmd.index("--author")
+            assert cmd[idx + 1] == "Nova <nova@cp.dev>"
+
+    def test_push_uses_detected_branch(self, tmp_path):
+        """git push uses the branch name from rev-parse."""
+        with mock.patch("crazypumpkin.framework.delivery.run") as mocked:
+            mocked.side_effect = [
+                self._ok(),  # add
+                self._ok(),  # commit
+                self._ok(stdout="agent/prod/task\n"),  # rev-parse
+                self._ok(),  # push
+            ]
+            commit_and_push(
+                str(tmp_path), ["f.py"],
+                "msg", "A", "a@b.com", "upstream",
+            )
+            push_call = mocked.call_args_list[3]
+            cmd = push_call[0][0]
+            assert cmd == ["git", "push", "upstream", "agent/prod/task"]
+
+    def test_raises_on_add_failure(self, tmp_path):
+        with mock.patch("crazypumpkin.framework.delivery.run") as mocked:
+            mocked.return_value = self._fail()
+            with pytest.raises(RuntimeError, match="git add failed"):
+                commit_and_push(
+                    str(tmp_path), ["f.py"],
+                    "msg", "A", "a@b.com",
+                )
+
+    def test_raises_on_commit_failure(self, tmp_path):
+        with mock.patch("crazypumpkin.framework.delivery.run") as mocked:
+            mocked.side_effect = [self._ok(), self._fail()]
+            with pytest.raises(RuntimeError, match="git commit failed"):
+                commit_and_push(
+                    str(tmp_path), ["f.py"],
+                    "msg", "A", "a@b.com",
+                )
+
+    def test_raises_on_push_failure(self, tmp_path):
+        with mock.patch("crazypumpkin.framework.delivery.run") as mocked:
+            mocked.side_effect = [
+                self._ok(),  # add
+                self._ok(),  # commit
+                self._ok(stdout="main\n"),  # rev-parse
+                self._fail(),  # push
+            ]
+            with pytest.raises(RuntimeError, match="git push failed"):
+                commit_and_push(
+                    str(tmp_path), ["f.py"],
+                    "msg", "A", "a@b.com",
+                )
+
+    def test_cwd_is_worktree_path(self, tmp_path):
+        """All git commands run inside the worktree directory."""
+        wt = str(tmp_path / "my-worktree")
+        with mock.patch("crazypumpkin.framework.delivery.run") as mocked:
+            mocked.return_value = self._ok()
+            commit_and_push(wt, ["f.py"], "msg", "A", "a@b.com")
+            for call in mocked.call_args_list:
+                assert call[1]["cwd"] == wt
