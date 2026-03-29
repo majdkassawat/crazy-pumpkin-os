@@ -18,10 +18,18 @@ class DeveloperAgent(ClaudeSDKAgent):
     repository.
     """
 
+    SYSTEM_PROMPT = (
+        "You are a senior software developer. Your role is to read, write, "
+        "and modify code within the repository. Follow best practices for "
+        "code quality, maintainability, and correctness. Provide clear "
+        "explanations of any changes you make."
+    )
+
     def __init__(self, agent: Agent) -> None:
         super().__init__(
             agent,
             tool_permissions={"read": True, "write": True, "bash": False},
+            system_prompt=self.SYSTEM_PROMPT,
         )
 
     def execute(self, task: Task, context: dict[str, Any]) -> TaskOutput:
@@ -59,6 +67,10 @@ class DeveloperAgent(ClaudeSDKAgent):
             "max_tokens": 16384,
             "messages": list(self._history),
         }
+        if self.system_prompt is not None:
+            create_kwargs["system"] = [
+                {"type": "text", "text": self.system_prompt, "cache_control": {"type": "ephemeral"}},
+            ]
         if tools:
             create_kwargs["tools"] = tools
 

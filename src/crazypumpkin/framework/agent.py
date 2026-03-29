@@ -67,6 +67,7 @@ class ClaudeSDKAgent(BaseAgent):
         self,
         agent: Agent,
         tool_permissions: dict[str, bool] | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         super().__init__(agent)
         self.tool_permissions: dict[str, bool] = tool_permissions or {
@@ -74,6 +75,7 @@ class ClaudeSDKAgent(BaseAgent):
             "write": False,
             "bash": False,
         }
+        self.system_prompt: str | None = system_prompt
         self._history: list[dict[str, Any]] = []
 
     def _build_tools(self) -> list[dict[str, Any]]:
@@ -118,6 +120,10 @@ class ClaudeSDKAgent(BaseAgent):
             "max_tokens": 4096,
             "messages": list(self._history),
         }
+        if self.system_prompt is not None:
+            create_kwargs["system"] = [
+                {"type": "text", "text": self.system_prompt, "cache_control": {"type": "ephemeral"}},
+            ]
         if tools:
             create_kwargs["tools"] = tools
 
