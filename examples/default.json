@@ -1,0 +1,61 @@
+{
+  "company": {
+    "name": "My AI Company"
+  },
+
+  "products": [
+    {
+      "name": "MyApp",
+      "workspace": "./products/myapp",
+      "source_dir": "src",
+      "test_dir": "tests",
+      "test_command": "python -m pytest tests/ -v --tb=short",
+      "git_branch": "main",
+      "auto_pm": false
+    }
+  ],
+
+  "llm": {
+    "default_provider": "anthropic_api",
+    "providers": {
+      "anthropic_api": {
+        "api_key": "${ANTHROPIC_API_KEY}"
+      }
+    },
+    "agent_models": {
+      "developer": { "model": "sonnet" },
+      "strategist": { "model": "sonnet" },
+      "reviewer": { "model": "sonnet" }
+    }
+  },
+
+  "agents": [
+    {
+      "name": "Developer",
+      "role": "execution",
+      "class": "crazypumpkin.agents.developer.DeveloperAgent",
+      "model": "sonnet",
+      "group": "execution",
+      "description": "Executes tasks — writes code, runs tests"
+    }
+  ],
+
+  "pipeline": {
+    "cycle_interval": 30,
+    "task_timeout_sec": 3600,
+    "task_escalation_retries": 2
+  },
+
+  "notifications": {
+    "providers": []
+  },
+
+  "dashboard": {
+    "port": 8500,
+    "host": "127.0.0.1"
+  },
+
+  "voice": {
+    "enabled": false
+  }
+}
