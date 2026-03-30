@@ -40,6 +40,7 @@ class LiteLLMProvider(LLMProvider):
         timeout: float | None = None,
         cwd: str | None = None,
         tools: list | None = None,
+        system: str | None = None,
         agent: str | None = None,
     ) -> str:
         """Call the LLM and return the text response."""

@@ -129,8 +129,10 @@ class OpenAIProvider(LLMProvider):
         cwd: str | None = None,
         system: str | None = None,
         cache: bool = True,
+        agent: str | None = None,
     ) -> str:
-        return self.call(prompt, tools=tools, timeout=timeout, cwd=cwd, system=system, cache=cache)
+        """Single-turn fallback — OpenAI multi-turn not yet implemented."""
+        return self.call(prompt, model=None, timeout=timeout, cwd=cwd, tools=tools, system=system, cache=cache, agent=agent)
 
     def call_json(self, prompt: str, **kwargs: object) -> dict | list:
         resolved = self._resolve_model(kwargs.pop("model", None))  # type: ignore[arg-type]
