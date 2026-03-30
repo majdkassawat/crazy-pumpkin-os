@@ -158,6 +158,6 @@ if __name__ == "__main__":
 
 ## Next Steps
 
-- See [PLUGIN_GUIDE.md](../PLUGIN_GUIDE.md) for packaging agents as plugins
-- See [GETTING_STARTED.md](../GETTING_STARTED.md) for full project setup
-- See [API_DOCS.md](../API_DOCS.md) for detailed API documentation
+- [API Reference](api-reference.md) — Full public API documentation
+- [Plugin Development Guide](plugin-guide.md) — Package your agents as plugins
+- [CLI Reference](cli-reference.md) — Command-line interface usage
