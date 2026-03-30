@@ -84,14 +84,65 @@ All tests should pass before you start making changes.
 
 ```bash
 # Run all tests with verbose output
-pytest tests/ -v
+python -m pytest tests/ -v
 
 # Run a specific test file
-pytest tests/test_agents.py -v
+python -m pytest tests/test_agents.py -v
 
 # Run tests matching a keyword
-pytest -k "test_config" -v
+python -m pytest -k "test_config" -v
 ```
+
+### Linting
+
+We use [ruff](https://docs.astral.sh/ruff/) for linting and formatting:
+
+```bash
+# Check for lint errors
+ruff check src/ tests/
+
+# Auto-format code
+ruff format src/ tests/
+```
+
+### Type Checking
+
+Run mypy to verify type annotations:
+
+```bash
+mypy src/crazypumpkin/ --ignore-missing-imports
+```
+
+---
+
+## CI Pipeline
+
+Every pull request triggers automated CI via **GitHub Actions**. The pipeline runs:
+
+- **Tests** — `python -m pytest tests/ -v`
+- **Linting** — `ruff check src/ tests/`
+- **Formatting** — `ruff format --check src/ tests/`
+- **Type checking** — `mypy src/crazypumpkin/ --ignore-missing-imports`
+
+All checks must pass before a PR can be merged.
+
+---
+
+## Releasing
+
+Releases follow a tag-based workflow:
+
+1. Update the version in `pyproject.toml`.
+2. Commit the version bump and merge to `main`.
+3. Create a Git tag matching the version:
+
+   ```bash
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+4. Create a **GitHub Release** from the tag with release notes.
+5. PyPI publishing is triggered automatically by the GitHub Release via CI.
 
 ---
 
