@@ -6,9 +6,13 @@ Every agent in the framework extends BaseAgent and implements execute().
 
 from __future__ import annotations
 
+import logging
+import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
+from crazypumpkin.framework.logging import AgentLogContext, configure_agent_logging
+from crazypumpkin.framework.metrics import default_metrics
 from crazypumpkin.framework.models import Agent, AgentRole, Task, TaskOutput
 
 if TYPE_CHECKING:
@@ -45,6 +49,53 @@ class BaseAgent(ABC):
             TaskOutput with content and optional artifacts.
         """
         raise NotImplementedError
+
+    def setup(self, context: dict[str, Any]) -> None:
+        """Optional setup hook called before execute(). Override for custom logic."""
+
+    def teardown(self, context: dict[str, Any]) -> None:
+        """Optional teardown hook called after execute(). Always runs, even on error."""
+
+    def run(self, task: Task, context: dict[str, Any]) -> TaskOutput:
+        """Run the full agent lifecycle: setup, execute, teardown.
+
+        Calls setup(), then execute(), then teardown(). Teardown is
+        guaranteed to run even if execute() raises an exception.
+        Logs structured JSON for start/completion and records metrics.
+
+        Args:
+            task: The task to execute.
+            context: Runtime context.
+
+        Returns:
+            TaskOutput from execute().
+        """
+        log_ctx = AgentLogContext(
+            agent_id=self.id,
+            task_id=task.id,
+            cycle_id=context.get("cycle_id", ""),
+        )
+        configure_agent_logging()
+        logger = log_ctx.bind(logging.getLogger("crazypumpkin.agent"))
+        logger.info("Agent execution started")
+
+        self.setup(context)
+        start = time.monotonic()
+        try:
+            result = self.execute(task, context)
+            duration = time.monotonic() - start
+            logger.info("Agent execution completed", extra={"duration": duration})
+            default_metrics.record_execution(
+                self.id, duration, tokens=context.get("token_usage"), error=False,
+            )
+        except Exception:
+            duration = time.monotonic() - start
+            logger.error("Agent execution failed", extra={"duration": duration})
+            default_metrics.record_execution(self.id, duration, error=True)
+            raise
+        finally:
+            self.teardown(context)
+        return result
 
     def can_handle(self, task: Task) -> bool:
         """Whether this agent can handle the given task. Override for custom logic."""
