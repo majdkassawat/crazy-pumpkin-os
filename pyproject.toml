@@ -39,7 +39,12 @@ openai = ["openai>=1.0"]
 voice = ["openai>=1.0"]
 telegram = ["python-multipart>=0.0.6"]
 all = ["openai>=1.0", "python-multipart>=0.0.6"]
+plugins = ["importlib-metadata>=6.0; python_version<'3.12'"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
+
+# Third-party packages register CP-OS plugins via entry-points.
+# Format: plugin_name = "module.path:PluginClass"
+[project.entry-points."crazypumpkin.plugins"]
 
 [project.scripts]
 crazy-pumpkin = "crazypumpkin.cli:main"
