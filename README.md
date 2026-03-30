@@ -26,7 +26,7 @@ Get up and running in under 5 minutes.
 ### 1. Install
 
 ```bash
-pip install crazy-pumpkin-os
+pip install crazypumpkin
 ```
 
 ### 2. Set your API key
@@ -46,7 +46,7 @@ On Windows, use `set` instead of `export`.
 ### 3. Initialize your AI company
 
 ```bash
-crazy-pumpkin init
+cp init
 ```
 
 This launches an interactive wizard that creates your project directory with a `config.yaml`, `.env`, and a `goals/` inbox. See [`examples/default.json`](examples/default.json) for a sample configuration.
@@ -54,7 +54,7 @@ This launches an interactive wizard that creates your project directory with a `
 ### 4. Run the pipeline
 
 ```bash
-crazy-pumpkin run
+cp run
 ```
 
 The agents will pick up any goals in the `goals/` directory and begin working. Expected output:
