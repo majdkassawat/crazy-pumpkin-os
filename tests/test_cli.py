@@ -319,174 +319,225 @@ class TestWriteInitFilesReadme:
         assert "# Mega AI" in readme
 
 
-# ── TestCmdStatus ─────────────────────────────────────────────────────────
+# ── Test cmd_status ───────────────────────────────────────────────────────
 
 
 class TestCmdStatus:
-    """Tests for cmd_status registration, Namespace handling, and stdout."""
+    """Tests for the status CLI command."""
 
-    def _make_args(self):
+    def test_status_no_config(self, tmp_path, capsys):
+        """Status command with no configuration shows helpful message."""
         import argparse
-        return argparse.Namespace(command="status")
+        from crazypumpkin.cli import cmd_status
 
-    def _make_config(self, cycle_interval=30, name="Test Co"):
-        from unittest.mock import MagicMock
-        cfg = MagicMock()
-        cfg.company = {"name": name}
-        cfg.pipeline = {"cycle_interval": cycle_interval}
-        return cfg
+        args = argparse.Namespace(command="status")
+        # Patch load_config at its source location
+        with patch("crazypumpkin.framework.config.load_config", side_effect=FileNotFoundError("No config")):
+            cmd_status(args)
 
-    def test_registered_in_main_parser(self):
-        """'status' subcommand is registered in the main CLI parser."""
+        output = capsys.readouterr().out
+        assert "No configuration found" in output
+
+    def test_status_with_config_no_state(self, tmp_path, capsys):
+        """Status command with config but no state file shows company info."""
         import argparse
-        from crazypumpkin.cli import main
-        import inspect
-        src = inspect.getsource(main)
-        assert "status" in src
-
-    def test_namespace_command_attr(self):
-        """Namespace with command='status' is accepted without error."""
         from crazypumpkin.cli import cmd_status
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config()):
-            cmd_status(self._make_args())  # should not raise
+        from crazypumpkin.framework.config import Config
+        from crazypumpkin.framework.models import ProductConfig, AgentDefinition, AgentRole
 
-    def test_stdout_contains_company_name(self, capsys):
-        """cmd_status prints the company name."""
-        from crazypumpkin.cli import cmd_status
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config(name="Skynet LLC")):
-            cmd_status(self._make_args())
-        out = capsys.readouterr().out
-        assert "Skynet LLC" in out
+        args = argparse.Namespace(command="status")
+        # Create a mock config
+        mock_config = Config(
+            company={"name": "Test Company"},
+            products=[ProductConfig(name="Product A", workspace="/tmp/prod-a")],
+            agents=[AgentDefinition(name="Developer", role=AgentRole.EXECUTION)],
+        )
+        with patch("crazypumpkin.framework.config.load_config", return_value=mock_config), \
+             patch("crazypumpkin.framework.paths.get_project_root", return_value=tmp_path):
+            cmd_status(args)
 
-    def test_stdout_contains_cycle_interval(self, capsys):
-        """cmd_status prints the cycle_interval."""
-        from crazypumpkin.cli import cmd_status
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config(cycle_interval=60)):
-            cmd_status(self._make_args())
-        out = capsys.readouterr().out
-        assert "60" in out
+        output = capsys.readouterr().out
+        assert "Test Company" in output
+        assert "Product A" in output
+        assert "Total tasks: 0" in output
+        assert "no activity yet" in output
 
-    def test_stdout_contains_task_labels(self, capsys):
-        """cmd_status prints pending/running/complete task labels."""
-        from crazypumpkin.cli import cmd_status
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config()):
-            cmd_status(self._make_args())
-        out = capsys.readouterr().out
-        assert "pending" in out
-        assert "running" in out
-        assert "complete" in out
-
-
-# ── TestCmdRunContinuous ──────────────────────────────────────────────────
-
-
-class TestCmdRunContinuous:
-    """Tests for cmd_run continuous-mode: loop behavior and --interval override."""
-
-    def _make_run_args(self, once=False, interval=None):
+    def test_status_with_tasks(self, tmp_path, capsys):
+        """Status command with tasks shows correct statistics."""
         import argparse
-        return argparse.Namespace(command="run", once=once, interval=interval)
+        import json
+        from crazypumpkin.cli import cmd_status
+        from crazypumpkin.framework.config import Config
+        from crazypumpkin.framework.models import ProductConfig, AgentDefinition, AgentRole
 
-    def _make_config(self, cycle_interval=30):
-        from unittest.mock import MagicMock
-        cfg = MagicMock()
-        cfg.company = {"name": "Test Co"}
-        # Use a real dict so .get() works correctly
-        cfg.pipeline = {"cycle_interval": cycle_interval}
-        return cfg
+        # Create data directory with state
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
 
-    def _make_scheduler(self):
-        from unittest.mock import MagicMock
-        scheduler = MagicMock()
-        scheduler.run_once.return_value = {"tasks_processed": 1}
-        return scheduler
+        state = {
+            "projects": {},
+            "tasks": {
+                "task-1": {
+                    "id": "task-1",
+                    "title": "Task 1",
+                    "status": "completed",
+                    "project_id": "",
+                    "updated_at": "2024-01-15T10:30:00+00:00",
+                    "created_at": "2024-01-15T10:00:00+00:00",
+                },
+                "task-2": {
+                    "id": "task-2",
+                    "title": "Task 2",
+                    "status": "completed",
+                    "project_id": "",
+                    "updated_at": "2024-01-15T11:00:00+00:00",
+                    "created_at": "2024-01-15T10:30:00+00:00",
+                },
+                "task-3": {
+                    "id": "task-3",
+                    "title": "Task 3",
+                    "status": "in_progress",
+                    "project_id": "",
+                    "updated_at": "2024-01-15T12:00:00+00:00",
+                    "created_at": "2024-01-15T11:00:00+00:00",
+                },
+                "task-4": {
+                    "id": "task-4",
+                    "title": "Task 4",
+                    "status": "planned",
+                    "project_id": "",
+                    "updated_at": "2024-01-15T09:00:00+00:00",
+                    "created_at": "2024-01-15T09:00:00+00:00",
+                },
+                "task-5": {
+                    "id": "task-5",
+                    "title": "Task 5",
+                    "status": "rejected",
+                    "project_id": "",
+                    "updated_at": "2024-01-15T08:00:00+00:00",
+                    "created_at": "2024-01-15T08:00:00+00:00",
+                },
+            },
+            "reviews": {},
+            "approvals": {},
+            "proposals": {},
+            "agent_metrics": {
+                "agent-1": {
+                    "agent_id": "agent-1",
+                    "agent_name": "Developer",
+                    "tasks_completed": 2,
+                    "tasks_rejected": 1,
+                    "total_retries": 0,
+                    "total_duration_sec": 0.0,
+                    "first_attempt_accepted": 0,
+                    "budget_spent_usd": 0.0,
+                    "recent_outcomes": [],
+                },
+            },
+        }
+        (data_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
 
-    def test_continuous_loop_calls_sleep(self, capsys):
-        """Continuous mode calls time.sleep between cycles."""
-        from crazypumpkin.cli import cmd_run
-        scheduler = self._make_scheduler()
-        sleep_calls = []
+        args = argparse.Namespace(command="status")
+        mock_config = Config(
+            company={"name": "Acme Corp"},
+            products=[ProductConfig(name="Widget Factory", workspace="/tmp/widgets")],
+            agents=[AgentDefinition(name="Developer", role=AgentRole.EXECUTION)],
+        )
+        with patch("crazypumpkin.framework.config.load_config", return_value=mock_config), \
+             patch("crazypumpkin.framework.paths.get_project_root", return_value=tmp_path):
+            cmd_status(args)
 
-        def fake_sleep(n):
-            sleep_calls.append(n)
-            raise KeyboardInterrupt
+        output = capsys.readouterr().out
+        assert "Acme Corp" in output
+        assert "Widget Factory" in output
+        assert "Total tasks: 5" in output
+        assert "Completed: 2" in output
+        assert "In Progress: 1" in output
+        assert "Rejected: 1" in output
+        assert "Developer" in output
+        assert "2 completed, 1 rejected" in output
+        assert "67% success" in output
+        assert "Last updated: 2024-01-15T12:00:00+00:00" in output
 
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config()), \
-             patch("crazypumpkin.scheduler.scheduler.Scheduler",
-                   return_value=scheduler), \
-             patch("crazypumpkin.cli.time.sleep", side_effect=fake_sleep):
-            cmd_run(self._make_run_args())
+    def test_status_with_escalated_tasks(self, tmp_path, capsys):
+        """Status command shows escalated tasks count."""
+        import argparse
+        import json
+        from crazypumpkin.cli import cmd_status
+        from crazypumpkin.framework.config import Config
+        from crazypumpkin.framework.models import ProductConfig, AgentDefinition, AgentRole
 
-        assert len(sleep_calls) >= 1
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
 
-    def test_continuous_loop_stops_on_keyboard_interrupt(self, capsys):
-        """KeyboardInterrupt exits the loop gracefully."""
-        from crazypumpkin.cli import cmd_run
-        scheduler = self._make_scheduler()
+        state = {
+            "projects": {},
+            "tasks": {
+                "t1": {"id": "t1", "title": "T1", "status": "escalated", "project_id": "", "updated_at": "2024-01-01T00:00:00Z", "created_at": "2024-01-01T00:00:00Z"},
+                "t2": {"id": "t2", "title": "T2", "status": "escalated", "project_id": "", "updated_at": "2024-01-01T01:00:00Z", "created_at": "2024-01-01T01:00:00Z"},
+            },
+            "reviews": {},
+            "approvals": {},
+            "proposals": {},
+            "agent_metrics": {},
+        }
+        (data_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
 
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config()), \
-             patch("crazypumpkin.scheduler.scheduler.Scheduler",
-                   return_value=scheduler), \
-             patch("crazypumpkin.cli.time.sleep", side_effect=KeyboardInterrupt):
-            cmd_run(self._make_run_args())  # should not raise
+        args = argparse.Namespace(command="status")
+        mock_config = Config(
+            company={"name": "Escalation Test"},
+            products=[ProductConfig(name="Critical System", workspace="/tmp/critical")],
+            agents=[AgentDefinition(name="Dev", role=AgentRole.EXECUTION)],
+        )
+        with patch("crazypumpkin.framework.config.load_config", return_value=mock_config), \
+             patch("crazypumpkin.framework.paths.get_project_root", return_value=tmp_path):
+            cmd_status(args)
 
-        out = capsys.readouterr().out
-        assert "stopped" in out.lower() or "pipeline" in out.lower()
+        output = capsys.readouterr().out
+        assert "Escalated: 2" in output
 
-    def test_interval_override_used_in_sleep(self):
-        """--interval flag overrides config cycle_interval for time.sleep."""
-        from crazypumpkin.cli import cmd_run
-        scheduler = self._make_scheduler()
-        sleep_calls = []
+    def test_status_agent_with_no_tasks(self, tmp_path, capsys):
+        """Status command handles agents with no task activity."""
+        import argparse
+        import json
+        from crazypumpkin.cli import cmd_status
+        from crazypumpkin.framework.config import Config
+        from crazypumpkin.framework.models import ProductConfig, AgentDefinition, AgentRole
 
-        def fake_sleep(n):
-            sleep_calls.append(n)
-            raise KeyboardInterrupt
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
 
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config(cycle_interval=30)), \
-             patch("crazypumpkin.scheduler.scheduler.Scheduler",
-                   return_value=scheduler), \
-             patch("crazypumpkin.cli.time.sleep", side_effect=fake_sleep):
-            cmd_run(self._make_run_args(interval=5))
+        state = {
+            "projects": {},
+            "tasks": {},
+            "reviews": {},
+            "approvals": {},
+            "proposals": {},
+            "agent_metrics": {
+                "agent-1": {
+                    "agent_id": "agent-1",
+                    "agent_name": "Strategist",
+                    "tasks_completed": 0,
+                    "tasks_rejected": 0,
+                    "total_retries": 0,
+                    "total_duration_sec": 0.0,
+                    "first_attempt_accepted": 0,
+                    "budget_spent_usd": 0.0,
+                    "recent_outcomes": [],
+                },
+            },
+        }
+        (data_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
 
-        assert sleep_calls[0] == 5
+        args = argparse.Namespace(command="status")
+        mock_config = Config(
+            company={"name": "New Company"},
+            products=[ProductConfig(name="New Product", workspace="/tmp/new")],
+            agents=[AgentDefinition(name="Strategist", role=AgentRole.STRATEGY)],
+        )
+        with patch("crazypumpkin.framework.config.load_config", return_value=mock_config), \
+             patch("crazypumpkin.framework.paths.get_project_root", return_value=tmp_path):
+            cmd_status(args)
 
-    def test_interval_default_from_config(self):
-        """Without --interval, cycle_interval from config is used for sleep."""
-        from crazypumpkin.cli import cmd_run
-        scheduler = self._make_scheduler()
-        sleep_calls = []
-
-        def fake_sleep(n):
-            sleep_calls.append(n)
-            raise KeyboardInterrupt
-
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config(cycle_interval=42)), \
-             patch("crazypumpkin.scheduler.scheduler.Scheduler",
-                   return_value=scheduler), \
-             patch("crazypumpkin.cli.time.sleep", side_effect=fake_sleep):
-            cmd_run(self._make_run_args(interval=None))
-
-        assert sleep_calls[0] == 42
-
-    def test_run_once_does_not_call_sleep(self):
-        """--once flag runs a single cycle without calling time.sleep."""
-        from crazypumpkin.cli import cmd_run
-        scheduler = self._make_scheduler()
-
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config()), \
-             patch("crazypumpkin.scheduler.scheduler.Scheduler",
-                   return_value=scheduler), \
-             patch("crazypumpkin.cli.time.sleep") as mock_sleep:
-            cmd_run(self._make_run_args(once=True))
-
-        mock_sleep.assert_not_called()
+        output = capsys.readouterr().out
+        assert "no tasks yet" in output

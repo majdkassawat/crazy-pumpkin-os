@@ -351,14 +351,114 @@ def cmd_goal(args):
 
 
 def cmd_status(args):
-    """Show current company status."""
-    from crazypumpkin.framework.config import load_config
+    """Show current company status.
 
-    config = load_config()
-    cycle_interval = config.pipeline.get("cycle_interval", 30)
-    print(f"Company: {config.company.get('name', 'Unknown')}")
-    print(f"cycle_interval: {cycle_interval}s")
-    print("Tasks — pending: 0  running: 0  complete: 0")
+    Displays:
+    - Company name and products
+    - Task statistics by status
+    - Agent metrics (completed/rejected tasks)
+    - Last update time
+    """
+    from pathlib import Path
+
+    from crazypumpkin.framework.config import load_config
+    from crazypumpkin.framework.models import TaskStatus
+    from crazypumpkin.framework.paths import get_project_root
+    from crazypumpkin.framework.store import Store
+
+    # Try to load configuration
+    try:
+        config = load_config()
+        company_name = config.company.get("name", "Unknown")
+        products = [p.name for p in config.products]
+        project_root = get_project_root()
+    except FileNotFoundError:
+        print("No configuration found. Run 'crazypumpkin init' first.")
+        return
+    except Exception as e:
+        print(f"Error loading configuration: {e}")
+        return
+
+    # Try to load store
+    data_dir = project_root / "data"
+    store = Store(data_dir=data_dir)
+    has_state = store.load()
+
+    # Collect task statistics
+    task_stats = {}
+    for status in TaskStatus:
+        task_stats[status.value] = len(store.tasks_by_status(status.value))
+
+    # Get agent metrics
+    agent_metrics = store.get_all_agent_metrics()
+
+    # Find last update time
+    last_update = None
+    for task in store.tasks.values():
+        if task.updated_at:
+            if last_update is None or task.updated_at > last_update:
+                last_update = task.updated_at
+
+    # Format output
+    print()
+    print("━" * 50)
+    print(f"  🎃 {company_name}")
+    print("━" * 50)
+
+    # Products section
+    if products:
+        print("\n📦 Products:")
+        for name in products:
+            print(f"   • {name}")
+    else:
+        print("\n📦 Products: (none configured)")
+
+    # Task statistics section
+    print("\n📊 Task Statistics:")
+
+    # Key metrics
+    total_tasks = sum(task_stats.values())
+    completed = task_stats.get("completed", 0)
+    in_progress = task_stats.get("in_progress", 0)
+    assigned = task_stats.get("assigned", 0)
+    planned = task_stats.get("planned", 0)
+    created = task_stats.get("created", 0)
+    pending = planned + created + assigned
+    failed = task_stats.get("rejected", 0)
+    escalated = task_stats.get("escalated", 0)
+
+    print(f"   Total tasks: {total_tasks}")
+    print(f"   ✅ Completed: {completed}")
+    print(f"   🔄 In Progress: {in_progress}")
+    print(f"   ⏳ Pending: {pending} (planned: {planned}, created: {created}, assigned: {assigned})")
+    if failed > 0:
+        print(f"   ❌ Rejected: {failed}")
+    if escalated > 0:
+        print(f"   ⚠️  Escalated: {escalated}")
+
+    # Agent metrics section
+    if agent_metrics:
+        print("\n🤖 Agent Metrics:")
+        for m in agent_metrics:
+            total = m.tasks_completed + m.tasks_rejected
+            if total > 0:
+                success_rate = m.tasks_completed / total * 100
+                print(f"   • {m.agent_name or m.agent_id}: {m.tasks_completed} completed, {m.tasks_rejected} rejected ({success_rate:.0f}% success)")
+            else:
+                print(f"   • {m.agent_name or m.agent_id}: no tasks yet")
+    else:
+        print("\n🤖 Agent Metrics: (no activity yet)")
+
+    # Last update
+    if last_update:
+        print(f"\n🕐 Last updated: {last_update}")
+
+    print()
+
+    # State file status
+    if not has_state:
+        print("ℹ️  No state file found. Pipeline has not been run yet.")
+        print("   Run 'crazypumpkin run' to start the pipeline.")
 
 
 def main():
