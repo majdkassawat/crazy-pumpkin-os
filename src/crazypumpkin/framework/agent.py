@@ -6,9 +6,13 @@ Every agent in the framework extends BaseAgent and implements execute().
 
 from __future__ import annotations
 
+import logging
+import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
+from crazypumpkin.framework.logging import AgentLogContext, configure_agent_logging
+from crazypumpkin.framework.metrics import default_metrics
 from crazypumpkin.framework.models import Agent, AgentRole, Task, TaskOutput
 
 if TYPE_CHECKING:
@@ -57,6 +61,7 @@ class BaseAgent(ABC):
 
         Calls setup(), then execute(), then teardown(). Teardown is
         guaranteed to run even if execute() raises an exception.
+        Logs structured JSON for start/completion and records metrics.
 
         Args:
             task: The task to execute.
@@ -65,9 +70,29 @@ class BaseAgent(ABC):
         Returns:
             TaskOutput from execute().
         """
+        log_ctx = AgentLogContext(
+            agent_id=self.id,
+            task_id=task.id,
+            cycle_id=context.get("cycle_id", ""),
+        )
+        configure_agent_logging()
+        logger = log_ctx.bind(logging.getLogger("crazypumpkin.agent"))
+        logger.info("Agent execution started")
+
         self.setup(context)
+        start = time.monotonic()
         try:
             result = self.execute(task, context)
+            duration = time.monotonic() - start
+            logger.info("Agent execution completed", extra={"duration": duration})
+            default_metrics.record_execution(
+                self.id, duration, tokens=context.get("token_usage"), error=False,
+            )
+        except Exception:
+            duration = time.monotonic() - start
+            logger.error("Agent execution failed", extra={"duration": duration})
+            default_metrics.record_execution(self.id, duration, error=True)
+            raise
         finally:
             self.teardown(context)
         return result
@@ -93,6 +118,7 @@ class ClaudeSDKAgent(BaseAgent):
         self,
         agent: Agent,
         tool_permissions: dict[str, bool] | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         super().__init__(agent)
         self.tool_permissions: dict[str, bool] = tool_permissions or {
@@ -100,6 +126,7 @@ class ClaudeSDKAgent(BaseAgent):
             "write": False,
             "bash": False,
         }
+        self.system_prompt: str | None = system_prompt
         self._history: list[dict[str, Any]] = []
 
     def _build_tools(self) -> list[dict[str, Any]]:
@@ -144,6 +171,10 @@ class ClaudeSDKAgent(BaseAgent):
             "max_tokens": 4096,
             "messages": list(self._history),
         }
+        if self.system_prompt is not None:
+            create_kwargs["system"] = [
+                {"type": "text", "text": self.system_prompt, "cache_control": {"type": "ephemeral"}},
+            ]
         if tools:
             create_kwargs["tools"] = tools
 

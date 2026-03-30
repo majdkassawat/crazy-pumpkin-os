@@ -17,6 +17,17 @@ configure_agent_logging = _log_mod.configure_agent_logging
 REQUIRED_KEYS = {"timestamp", "level", "message", "agent_id", "task_id", "cycle_id"}
 
 
+class _CaptureHandler(logging.Handler):
+    """Handler that stores formatted records for inspection."""
+
+    def __init__(self):
+        super().__init__()
+        self.records: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(self.format(record))
+
+
 # ── StructuredFormatter ──────────────────────────────────────────────
 
 
@@ -106,11 +117,11 @@ class TestAgentLogContext:
         # Capture formatted output via a custom handler
         captured = []
 
-        class _CaptureHandler(logging.Handler):
+        class _InlineCapture(logging.Handler):
             def emit(self, record):
                 captured.append(fmt.format(record))
 
-        cap = _CaptureHandler()
+        cap = _InlineCapture()
         logger.addHandler(cap)
 
         adapter.info("test log")

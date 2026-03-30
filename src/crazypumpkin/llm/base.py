@@ -15,6 +15,7 @@ class LLMProvider(ABC):
         timeout: float | None = None,
         cwd: str | None = None,
         tools: list | None = None,
+        system: str | None = None,
     ) -> str: ...
 
     @abstractmethod
@@ -29,5 +30,6 @@ class LLMProvider(ABC):
         tools: list | None = None,
         timeout: float | None = None,
         cwd: str | None = None,
+        system: str | None = None,
     ) -> str:
         """Run an agentic conversation loop until the model stops issuing tool calls or *max_turns* is reached."""

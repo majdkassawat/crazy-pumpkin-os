@@ -1,0 +1,62 @@
+# Crazy Pumpkin OS — Minimal 2-Agent Pipeline Example
+#
+# This is a minimal configuration demonstrating a simple 2-agent pipeline:
+# - Strategist: Decomposes high-level goals into developer tasks
+# - Developer: Executes tasks and generates code
+#
+# Use this as a starting point for understanding the basic agent setup.
+
+company:
+  name: "Minimal Demo Company"
+
+products:
+  - name: "Demo App"
+    workspace: "./demo-app"           # relative to project root
+    source_dir: "src"
+    test_dir: "tests"
+    test_command: "python -m pytest tests/ -v --tb=short"
+    git_branch: "main"
+
+llm:
+  default_provider: anthropic_api
+  providers:
+    anthropic_api:
+      api_key: ${ANTHROPIC_API_KEY}    # reads from environment variable
+    # openai_api:
+    #   api_key: ${OPENAI_API_KEY}
+
+  # Which model each agent role uses
+  agent_models:
+    strategist: { model: claude-sonnet-4-6 }
+    developer:  { model: sonnet }
+
+agents:
+  # Strategist: Breaks down high-level product goals into ordered developer tasks
+  - name: "Strategist"
+    role: strategy
+    class: crazypumpkin.agents.strategy_agent.StrategyAgent
+    model: claude-sonnet-4-6
+    group: planning
+    description: "Decomposes product goals into actionable developer tasks"
+
+  # Developer: Executes tasks and generates code
+  - name: "Developer"
+    role: execution
+    class: crazypumpkin.agents.code_generator.CodeGeneratorAgent
+    model: sonnet
+    group: execution
+    description: "Generates code artifacts from task specifications"
+
+pipeline:
+  cycle_interval: 30       # seconds between cycles
+  task_timeout_sec: 3600   # max time for a single task
+
+notifications:
+  providers: []
+
+dashboard:
+  port: 8500
+  host: "127.0.0.1"
+
+voice:
+  enabled: false

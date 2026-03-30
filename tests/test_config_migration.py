@@ -275,3 +275,28 @@ def test_empty_registry_different_versions_raises():
     """Different versions with no registered migrations raises ValueError."""
     with pytest.raises(ValueError, match="No migration path"):
         migrate_config("1.0", "2.0")
+
+
+def test_register_migration_stores_in_registry():
+    """register_migration decorator registers a step in _migrations."""
+    @register_migration("1.0", "2.0")
+    def _v1_to_v2(cfg):
+        return cfg
+
+    assert ("1.0", "2.0") in _mig._migrations
+    assert _mig._migrations[("1.0", "2.0")] is _v1_to_v2
+
+
+def test_clear_migrations_empties_both_internals():
+    """clear_migrations() empties both _migrations and _version_order."""
+    @register_migration("1.0", "2.0")
+    def _v1_to_v2(cfg):
+        return cfg
+
+    assert len(_mig._migrations) > 0
+    assert len(_mig._version_order) > 0
+
+    clear_migrations()
+
+    assert _mig._migrations == {}
+    assert _mig._version_order == []

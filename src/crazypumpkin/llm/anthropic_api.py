@@ -42,6 +42,7 @@ class AnthropicProvider(LLMProvider):
         timeout: float | None = None,
         cwd: str | None = None,
         tools: list | None = None,
+        system: str | None = None,
     ) -> str:
         resolved = self._resolve_model(model)
         kwargs: dict = {
@@ -49,6 +50,8 @@ class AnthropicProvider(LLMProvider):
             "max_tokens": 4096,
             "messages": [{"role": "user", "content": prompt}],
         }
+        if system is not None:
+            kwargs["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
         if timeout is not None:
             kwargs["timeout"] = timeout
         if tools:
@@ -60,11 +63,14 @@ class AnthropicProvider(LLMProvider):
     def call_json(self, prompt: str, **kwargs: object) -> dict | list:
         resolved = self._resolve_model(kwargs.pop("model", None))  # type: ignore[arg-type]
         timeout = kwargs.pop("timeout", None)
+        system = kwargs.pop("system", None)
         create_kwargs: dict = {
             "model": resolved,
             "max_tokens": 4096,
             "messages": [{"role": "user", "content": prompt}],
         }
+        if system is not None:
+            create_kwargs["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
         if timeout is not None:
             create_kwargs["timeout"] = timeout
         response = self._client.messages.create(**create_kwargs)
@@ -81,6 +87,7 @@ class AnthropicProvider(LLMProvider):
         timeout: float | None = None,
         cwd: str | None = None,
         tool_executor: object | None = None,
+        system: str | None = None,
     ) -> str:
         """Run an agentic conversation loop until the model stops issuing tool calls or *max_turns* is reached.
 
@@ -96,7 +103,7 @@ class AnthropicProvider(LLMProvider):
                 ``None`` every tool call returns ``"ok"``.
         """
         if not tools:
-            return self.call(prompt, timeout=timeout, cwd=cwd)
+            return self.call(prompt, timeout=timeout, cwd=cwd, system=system)
 
         resolved = self._resolve_model(None)
         messages: list[dict] = [{"role": "user", "content": prompt}]
@@ -110,6 +117,8 @@ class AnthropicProvider(LLMProvider):
                 "messages": messages,
                 "tools": tools,
             }
+            if system is not None:
+                kwargs["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
             if timeout is not None:
                 kwargs["timeout"] = timeout
 

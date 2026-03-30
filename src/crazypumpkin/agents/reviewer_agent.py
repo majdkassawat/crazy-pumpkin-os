@@ -17,10 +17,17 @@ class ReviewerAgent(ClaudeSDKAgent):
     are always disabled so the reviewer never modifies the codebase.
     """
 
+    SYSTEM_PROMPT = (
+        "You are a code reviewer. Review files for quality issues including "
+        "bugs, security vulnerabilities, performance problems, and style "
+        "violations. Provide actionable feedback."
+    )
+
     def __init__(self, agent: Agent) -> None:
         super().__init__(
             agent,
             tool_permissions={"read": True, "write": False, "bash": False},
+            system_prompt=self.SYSTEM_PROMPT,
         )
 
     def execute(self, task: Task, context: dict[str, Any]) -> TaskOutput:
@@ -49,7 +56,7 @@ class ReviewerAgent(ClaudeSDKAgent):
 
         criteria = "\n".join(f"- {c}" for c in task.acceptance_criteria)
         user_message = (
-            "You are a code reviewer. Review the following files for quality issues.\n\n"
+            "Review the following files for quality issues.\n\n"
             f"Task: {task.title}\n\n"
             f"Description:\n{task.description}\n\n"
         )
@@ -74,6 +81,10 @@ class ReviewerAgent(ClaudeSDKAgent):
             "max_tokens": 4096,
             "messages": list(self._history),
         }
+        if self.system_prompt is not None:
+            create_kwargs["system"] = [
+                {"type": "text", "text": self.system_prompt, "cache_control": {"type": "ephemeral"}},
+            ]
         if tools:
             create_kwargs["tools"] = tools
 

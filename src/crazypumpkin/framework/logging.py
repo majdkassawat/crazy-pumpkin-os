@@ -20,10 +20,15 @@ class StructuredFormatter(logging.Formatter):
             "logger": record.name,
         }
         # Merge any extra fields that were injected via LoggerAdapter
-        for key, value in vars(record).items():
-            if key not in payload and key not in logging.LogRecord(
-                "", 0, "", 0, "", (), None
-            ).__dict__:
+        _standard = {
+            "name", "msg", "args", "levelname", "levelno", "pathname",
+            "filename", "module", "exc_info", "exc_text", "stack_info",
+            "lineno", "funcName", "created", "msecs", "relativeCreated",
+            "thread", "threadName", "processName", "process", "message",
+            "taskName", "agent_id", "task_id", "cycle_id",
+        }
+        for key, value in record.__dict__.items():
+            if key not in _standard and key not in payload:
                 payload[key] = value
         return json.dumps(payload)
 
@@ -37,6 +42,7 @@ class AgentLogContext:
     cycle_id: str
 
     def bind(self, logger: logging.Logger) -> logging.LoggerAdapter:
+        """Return a LoggerAdapter that injects context fields into every record."""
         return logging.LoggerAdapter(
             logger,
             {

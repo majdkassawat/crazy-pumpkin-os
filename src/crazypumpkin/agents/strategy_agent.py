@@ -13,6 +13,11 @@ from crazypumpkin.llm.registry import ProviderRegistry
 class StrategyAgent(BaseAgent):
     """Agent that breaks a high-level product goal into ordered developer tasks."""
 
+    SYSTEM_PROMPT = (
+        "You are a technical strategy agent. Given the following high-level "
+        "product goal, produce an ordered JSON list of developer tasks."
+    )
+
     def __init__(self, agent: Agent, registry: ProviderRegistry, store: Store) -> None:
         super().__init__(agent)
         if agent.role != AgentRole.STRATEGY:
@@ -27,8 +32,6 @@ class StrategyAgent(BaseAgent):
         the store, and returns a summary of created task IDs.
         """
         prompt = (
-            "You are a technical strategy agent. Given the following high-level "
-            "product goal, produce an ordered JSON list of developer tasks.\n\n"
             f"Goal: {task.description}\n\n"
             "Return a JSON object with a single key \"tasks\" whose value is a list. "
             "Each element must have:\n"
@@ -41,7 +44,7 @@ class StrategyAgent(BaseAgent):
             "Return ONLY valid JSON, no markdown fences."
         )
 
-        result = self.registry.call_json(prompt, agent="strategy_agent")
+        result = self.registry.call_json(prompt, agent="strategy_agent", system=self.SYSTEM_PROMPT)
 
         raw_tasks: list[dict[str, Any]] = result.get("tasks", []) if isinstance(result, dict) else result
 

@@ -152,3 +152,5 @@ class TestStrategyAgent:
         sa.execute(_make_task(), {})
 
         registry.call_json.assert_called_once()
+        _, kwargs = registry.call_json.call_args
+        assert kwargs.get("system") == StrategyAgent.SYSTEM_PROMPT

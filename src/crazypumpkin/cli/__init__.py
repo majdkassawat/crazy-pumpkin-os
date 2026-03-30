@@ -12,9 +12,11 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -367,6 +369,98 @@ def cmd_status(args):
     print("Tasks — pending: 0  running: 0  complete: 0")
 
 
+@friendly_errors
+def cmd_install_plugin(args):
+    """Install a plugin package and validate its manifest."""
+    from crazypumpkin.framework.models import PluginManifest
+    from crazypumpkin.framework.plugin_loader import validate_plugin
+
+    package = args.package
+
+    # pip install the package
+    print(f"Installing plugin '{package}' ...")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", package],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"pip install failed:\n{result.stderr}", file=sys.stderr)
+        sys.exit(1)
+    print(result.stdout.rstrip())
+
+    # Validate the plugin manifest
+    manifest = PluginManifest(
+        name=package,
+        entry_point=package,
+        plugin_type="agent",
+    )
+    errors = validate_plugin(manifest)
+    if errors:
+        print("Plugin validation warnings:")
+        for err in errors:
+            print(f"  - {err}")
+    else:
+        print(f"Plugin '{package}' installed and validated successfully.")
+
+
+@friendly_errors
+def cmd_list_plugins(args):
+    """Discover and display all installed plugins."""
+    from crazypumpkin.framework.plugin_loader import discover_plugins
+
+    manifests = discover_plugins()
+
+    if not manifests:
+        print("No plugins found.")
+        return
+
+    # Print a formatted table
+    header = f"{'Name':<30} {'Version':<12} {'Type':<12} {'Status'}"
+    print(header)
+    print("-" * len(header))
+    for m in manifests:
+        version = m.version or "unknown"
+        plugin_type = m.plugin_type or "unknown"
+        status = "ok" if m.entry_point else "missing"
+        print(f"{m.name:<30} {version:<12} {plugin_type:<12} {status}")
+
+
+@friendly_errors
+def cmd_remove_plugin(args):
+    """Uninstall a plugin package or remove a local plugin directory."""
+    package = args.package
+
+    # Check for local plugin directory first
+    plugins_dir = Path(__file__).resolve().parent / "plugins"
+    local_plugin = plugins_dir / f"{package}.py"
+    local_plugin_dir = plugins_dir / package
+
+    removed_local = False
+    if local_plugin.is_file():
+        local_plugin.unlink()
+        print(f"Removed local plugin file: {local_plugin}")
+        removed_local = True
+    if local_plugin_dir.is_dir():
+        shutil.rmtree(str(local_plugin_dir))
+        print(f"Removed local plugin directory: {local_plugin_dir}")
+        removed_local = True
+
+    # pip uninstall the package
+    print(f"Uninstalling package '{package}' ...")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "uninstall", "-y", package],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 and not removed_local:
+        print(f"pip uninstall failed:\n{result.stderr}", file=sys.stderr)
+        sys.exit(1)
+
+    if result.returncode == 0:
+        print(result.stdout.rstrip())
+
+    print(f"Plugin '{package}' removed.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="crazypumpkin",
@@ -424,6 +518,22 @@ def main():
         help="Number of recent lines to show (default: 50)",
     )
 
+    install_plugin_parser = sub.add_parser(
+        "install-plugin", help="Install a plugin package",
+    )
+    install_plugin_parser.add_argument(
+        "package", help="Package name or path to install",
+    )
+
+    sub.add_parser("list-plugins", help="List all installed plugins")
+
+    remove_plugin_parser = sub.add_parser(
+        "remove-plugin", help="Remove a plugin package",
+    )
+    remove_plugin_parser.add_argument(
+        "package", help="Package name to remove",
+    )
+
     args = parser.parse_args()
 
     from crazypumpkin.cli.doctor import cmd_doctor
@@ -439,6 +549,9 @@ def main():
         "logs": cmd_logs,
         "wizard": run_wizard,
         "doctor": cmd_doctor,
+        "install-plugin": cmd_install_plugin,
+        "list-plugins": cmd_list_plugins,
+        "remove-plugin": cmd_remove_plugin,
     }
 
     if args.command in commands:
