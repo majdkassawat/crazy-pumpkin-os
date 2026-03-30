@@ -6,6 +6,7 @@ Commands:
     crazypumpkin dashboard  — Start the web dashboard
     crazypumpkin goal       — Create a new goal
     crazypumpkin status     — Show current company status
+    crazypumpkin logs       — Tail pipeline log files
 """
 
 from __future__ import annotations
@@ -13,25 +14,14 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import os
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-
-def friendly_errors(func):
-    """Decorator that catches exceptions and prints a user-friendly error message."""
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except SystemExit:
-            raise
-        except Exception as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            sys.exit(1)
-    return wrapper
+from crazypumpkin.cli.errors import friendly_errors
 
 
 def _write_init_files(answers: dict, target_dir: Path) -> None:
@@ -219,9 +209,10 @@ def _write_init_files(answers: dict, target_dir: Path) -> None:
 
 def _get_default_json_path() -> Path:
     """Return the path to the bundled examples/default.json."""
-    return Path(__file__).resolve().parent.parent.parent / "examples" / "default.json"
+    return Path(__file__).resolve().parent.parent.parent.parent / "examples" / "default.json"
 
 
+@friendly_errors
 def cmd_init(args):
     """Set up a new project by copying the default configuration.
 
@@ -289,6 +280,7 @@ def cmd_init(args):
     )
 
 
+@friendly_errors
 def cmd_run(args):
     """Start the pipeline.
 
@@ -324,48 +316,48 @@ def cmd_run(args):
         print("\nPipeline stopped by user.")
 
 
+@friendly_errors
 def cmd_dashboard(args):
     """Start the web dashboard.
 
     With ``--watch`` the dashboard prints a live status snapshot every
     *interval* seconds until Ctrl+C is pressed.
     """
+    from crazypumpkin.framework.config import load_config
+    from crazypumpkin.dashboard.view import render_dashboard
+
     watch: bool = getattr(args, "watch", False)
     interval: int = getattr(args, "interval", 5)
 
+    config = load_config()
+    data_dir = Path.cwd() / "data"
+
+    try:
+        from crazypumpkin.framework.store import Store
+        store = Store()
+    except Exception:
+        store = None
+
     if not watch:
-        print("crazypumpkin dashboard — coming soon")
+        print(render_dashboard(config, data_dir, store=store))
         return
 
-    from crazypumpkin.framework.config import load_config
-    from crazypumpkin.framework.events import EventBus
-    from crazypumpkin.framework.registry import AgentRegistry
-    from crazypumpkin.framework.store import Store
-    from crazypumpkin.scheduler.scheduler import Scheduler
-    from crazypumpkin.dashboard import get_agent_activity, get_task_status, get_recent_logs
-
-    config = load_config()
-    store = Store()
-    registry = AgentRegistry()
-    bus = EventBus()
-
-    print(f"Watching dashboard (interval={interval}s). Press Ctrl+C to stop.")
     try:
         while True:
-            agents = get_agent_activity(registry)
-            tasks = get_task_status(store)
-            logs = get_recent_logs(bus, n=5)
-            print(f"Agents: {len(agents)}  Tasks: {len(tasks)}  Recent events: {len(logs)}")
+            os.system("cls" if sys.platform == "win32" else "clear")
+            print(render_dashboard(config, data_dir, store=store))
             time.sleep(interval)
     except KeyboardInterrupt:
         print("\nDashboard watch stopped.")
 
 
+@friendly_errors
 def cmd_goal(args):
     """Create a new goal."""
     print("crazypumpkin goal — coming soon")
 
 
+@friendly_errors
 def cmd_status(args):
     """Show current company status."""
     from crazypumpkin.framework.config import load_config
@@ -505,6 +497,26 @@ def main():
     goal_parser.add_argument("description", nargs="?", default="", help="Goal description")
 
     sub.add_parser("status", help="Show current company status")
+    sub.add_parser("wizard", help="Interactive configuration wizard")
+    sub.add_parser("doctor", help="Check environment health")
+
+    logs_parser = sub.add_parser("logs", help="Tail pipeline log files")
+    logs_parser.add_argument(
+        "--follow", "-f", action="store_true", default=False,
+        help="Continuously follow new log output",
+    )
+    logs_parser.add_argument(
+        "--level", type=str, default=None,
+        help="Filter by severity level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
+    logs_parser.add_argument(
+        "--agent", type=str, default=None,
+        help="Filter by agent name",
+    )
+    logs_parser.add_argument(
+        "--lines", "-n", type=int, default=50,
+        help="Number of recent lines to show (default: 50)",
+    )
 
     install_plugin_parser = sub.add_parser(
         "install-plugin", help="Install a plugin package",
@@ -524,12 +536,19 @@ def main():
 
     args = parser.parse_args()
 
+    from crazypumpkin.cli.doctor import cmd_doctor
+    from crazypumpkin.cli.logs import cmd_logs
+    from crazypumpkin.cli.wizard import run_wizard
+
     commands = {
         "init": cmd_init,
         "run": cmd_run,
         "dashboard": cmd_dashboard,
         "goal": cmd_goal,
         "status": cmd_status,
+        "logs": cmd_logs,
+        "wizard": run_wizard,
+        "doctor": cmd_doctor,
         "install-plugin": cmd_install_plugin,
         "list-plugins": cmd_list_plugins,
         "remove-plugin": cmd_remove_plugin,
