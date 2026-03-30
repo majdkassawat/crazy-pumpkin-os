@@ -21,6 +21,8 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
 dependencies = [
@@ -47,6 +49,7 @@ Homepage = "https://github.com/majdkassawat/crazy-pumpkin-os"
 Documentation = "https://github.com/majdkassawat/crazy-pumpkin-os/tree/main/docs"
 Repository = "https://github.com/majdkassawat/crazy-pumpkin-os"
 Issues = "https://github.com/majdkassawat/crazy-pumpkin-os/issues"
+Changelog = "https://github.com/majdkassawat/crazy-pumpkin-os/releases"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
