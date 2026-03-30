@@ -732,6 +732,89 @@ class TestTriggerIntegration:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Tests — load_state / save_state persistence (standalone)
+# ---------------------------------------------------------------------------
+
+
+def test_load_state_no_file(tmp_path):
+    """load_state on empty dir returns defaults: last_run=None, cycle_count=0."""
+    scheduler = Scheduler(_make_config())
+    state = scheduler.load_state(tmp_path)
+
+    assert scheduler.last_run is None
+    assert scheduler.cycle_count == 0
+    assert state["last_run"] is None
+    assert state["cycle_count"] == 0
+
+
+def test_save_and_load_state_roundtrip(tmp_path):
+    """save_state then load_state: cycle_count=1, last_run is valid ISO timestamp."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+
+    scheduler = Scheduler(_make_config())
+    scheduler.save_state(data_dir)
+
+    scheduler2 = Scheduler(_make_config())
+    scheduler2.load_state(data_dir)
+
+    assert scheduler2.cycle_count == 1
+    assert scheduler2.last_run is not None
+    # Verify last_run is a valid ISO-8601 timestamp
+    parsed = datetime.fromisoformat(scheduler2.last_run)
+    assert parsed.tzinfo is not None
+
+
+def test_load_state_corrupt_json(tmp_path):
+    """Corrupt JSON in scheduler_state.json -> defaults without raising."""
+    (tmp_path / _STATE_FILENAME).write_text("NOT VALID JSON {{{", encoding="utf-8")
+
+    scheduler = Scheduler(_make_config())
+    state = scheduler.load_state(tmp_path)
+
+    assert scheduler.last_run is None
+    assert scheduler.cycle_count == 0
+    assert state == {"last_run": None, "cycle_count": 0}
+
+
+def test_save_state_creates_directory(tmp_path):
+    """save_state with a non-existent subdirectory path creates the directory and file."""
+    nested_dir = tmp_path / "a" / "b" / "c"
+    assert not nested_dir.exists()
+
+    scheduler = Scheduler(_make_config())
+    scheduler.save_state(nested_dir)
+
+    assert nested_dir.exists()
+    state_path = nested_dir / _STATE_FILENAME
+    assert state_path.exists()
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["cycle_count"] == 1
+
+
+def test_agent_last_dispatch_persisted(tmp_path):
+    """agent_last_dispatch survives save_state -> load_state in a new instance."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+
+    dispatches = {
+        "StrategyAgent": "2026-03-01T10:00:00+00:00",
+        "CodeGeneratorAgent": "2026-03-01T11:30:00+00:00",
+    }
+
+    scheduler = Scheduler(_make_config())
+    scheduler.agent_last_dispatch = dict(dispatches)
+    scheduler.save_state(data_dir)
+
+    scheduler2 = Scheduler(_make_config())
+    scheduler2.load_state(data_dir)
+
+    assert scheduler2.agent_last_dispatch == dispatches
+    for agent, ts in dispatches.items():
+        assert scheduler2.agent_last_dispatch[agent] == ts
+
+
 class TestAgentLastDispatchRoundTrip:
     """save_state/load_state preserves agent_last_dispatch exactly."""
 
