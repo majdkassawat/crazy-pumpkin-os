@@ -12,6 +12,11 @@ from crazypumpkin.observability.metrics import (
     record_agent_uptime,
     get_metrics_snapshot,
 )
+from crazypumpkin.observability.export import (
+    format_metrics,
+    MetricsHandler,
+    start_metrics_server,
+)
 
 __all__ = [
     "agent_call_context",
@@ -22,4 +27,7 @@ __all__ = [
     "record_error",
     "record_agent_uptime",
     "get_metrics_snapshot",
+    "format_metrics",
+    "MetricsHandler",
+    "start_metrics_server",
 ]
