@@ -262,15 +262,15 @@ class TestErrorIsolation:
 
         config = _make_config(
             products=[
-                {"name": "AppA", "workspace": str(workspace_a)},
-                {"name": "AppB", "workspace": str(workspace_b)},
+                ProductConfig(name="AppA", workspace=str(workspace_a)),
+                ProductConfig(name="AppB", workspace=str(workspace_b)),
             ]
         )
 
         original_process = Scheduler._process_product
 
         def _failing_process(self_sched, product):
-            if product.get("name") == "AppA":
+            if product.name == "AppA":
                 raise RuntimeError("Simulated failure")
             return original_process(self_sched, product)
 
@@ -293,7 +293,7 @@ class TestErrorIsolation:
         workspace = tmp_path / "ws"
 
         config = _make_config(
-            products=[{"name": "FailApp", "workspace": str(workspace)}]
+            products=[ProductConfig(name="FailApp", workspace=str(workspace))]
         )
 
         def _always_fail(self_sched, product):
