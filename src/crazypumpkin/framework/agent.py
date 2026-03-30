@@ -75,7 +75,8 @@ class BaseAgent(ABC):
             task_id=task.id,
             cycle_id=context.get("cycle_id", ""),
         )
-        logger = log_ctx.bind(configure_agent_logging())
+        configure_agent_logging()
+        logger = log_ctx.bind(logging.getLogger("crazypumpkin.agent"))
         logger.info("Agent execution started")
 
         self.setup(context)
