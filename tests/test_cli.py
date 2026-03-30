@@ -288,12 +288,15 @@ def test_cmd_status_task_count_labels(capsys):
     assert "complete" in out
 
 
-def test_cmd_status_missing_config_raises():
-    """cmd_status raises FileNotFoundError when config.yaml is absent."""
+def test_cmd_status_missing_config_raises(capsys):
+    """cmd_status exits with code 2 and friendly message when config.yaml is absent."""
     from crazypumpkin.cli import cmd_status
     with patch("crazypumpkin.framework.config.load_config", side_effect=FileNotFoundError("no config")):
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(SystemExit) as exc_info:
             cmd_status(_make_status_args())
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "File not found" in err
 
 
 def test_cmd_status_shows_cycle_interval(capsys):

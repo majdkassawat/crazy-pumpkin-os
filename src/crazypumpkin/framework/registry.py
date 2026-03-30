@@ -7,8 +7,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from typing import Callable
+
 from crazypumpkin.framework.agent import BaseAgent
-from crazypumpkin.framework.models import Agent, AgentRole, AgentStatus
+from crazypumpkin.framework.models import Agent, AgentRole, AgentStatus, deterministic_id
 
 if TYPE_CHECKING:
     from crazypumpkin.framework.store import Store
@@ -93,3 +95,46 @@ class AgentRegistry:
         for a in self._agents.values():
             counts[a.role.value] = counts.get(a.role.value, 0) + 1
         return counts
+
+
+# Module-level default registry instance
+default_registry = AgentRegistry()
+
+
+def register_agent(
+    name: str,
+    role: AgentRole,
+    registry: AgentRegistry | None = None,
+) -> Callable[[type], type]:
+    """Class decorator that instantiates and registers a BaseAgent subclass.
+
+    Usage::
+
+        @register_agent(name="my-agent", role=AgentRole.EXECUTION)
+        class MyAgent(BaseAgent):
+            def execute(self, task, context):
+                return TaskOutput(content="done")
+
+    Args:
+        name: Display name for the agent.
+        role: The agent's role in the organization.
+        registry: Registry to add the agent to (defaults to ``default_registry``).
+
+    Returns:
+        The original class, unmodified.
+    """
+    target_registry = registry or default_registry
+
+    def decorator(cls: type) -> type:
+        if not (isinstance(cls, type) and issubclass(cls, BaseAgent)):
+            raise TypeError("@register_agent can only be applied to BaseAgent subclasses")
+        agent_model = Agent(
+            id=deterministic_id(name),
+            name=name,
+            role=role,
+        )
+        instance = cls(agent_model)
+        target_registry.register(instance)
+        return cls
+
+    return decorator

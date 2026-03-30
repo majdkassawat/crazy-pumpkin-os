@@ -46,6 +46,32 @@ class BaseAgent(ABC):
         """
         raise NotImplementedError
 
+    def setup(self, context: dict[str, Any]) -> None:
+        """Optional setup hook called before execute(). Override for custom logic."""
+
+    def teardown(self, context: dict[str, Any]) -> None:
+        """Optional teardown hook called after execute(). Always runs, even on error."""
+
+    def run(self, task: Task, context: dict[str, Any]) -> TaskOutput:
+        """Run the full agent lifecycle: setup, execute, teardown.
+
+        Calls setup(), then execute(), then teardown(). Teardown is
+        guaranteed to run even if execute() raises an exception.
+
+        Args:
+            task: The task to execute.
+            context: Runtime context.
+
+        Returns:
+            TaskOutput from execute().
+        """
+        self.setup(context)
+        try:
+            result = self.execute(task, context)
+        finally:
+            self.teardown(context)
+        return result
+
     def can_handle(self, task: Task) -> bool:
         """Whether this agent can handle the given task. Override for custom logic."""
         return True
