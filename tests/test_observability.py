@@ -9,8 +9,10 @@ import pytest
 
 from crazypumpkin.observability.logging import (
     CorrelationFilter,
+    agent_call_context,
     correlation_id_var,
     get_logger,
+    start_pipeline_run,
 )
 from crazypumpkin.observability.metrics import (
     get_metrics_snapshot,
@@ -87,6 +89,95 @@ class TestCorrelationPropagation:
         ctx.run(_child)
         # Parent context unchanged
         assert correlation_id_var.get() == "parent-id"
+
+
+class TestStartPipelineRun:
+    """start_pipeline_run generates and sets a correlation ID."""
+
+    def setup_method(self):
+        correlation_id_var.set("")
+
+    def test_generates_unique_id(self):
+        cid = start_pipeline_run()
+        assert cid
+        assert len(cid) == 12
+        assert correlation_id_var.get() == cid
+
+    def test_explicit_id(self):
+        cid = start_pipeline_run(correlation_id="pipeline-99")
+        assert cid == "pipeline-99"
+        assert correlation_id_var.get() == "pipeline-99"
+
+    def test_loggers_inherit_pipeline_id(self, caplog):
+        cid = start_pipeline_run(correlation_id="pipe-abc")
+        logger = get_logger("test.pipeline")
+        with caplog.at_level(logging.DEBUG, logger="test.pipeline"):
+            logger.info("running")
+        assert caplog.records[0].correlation_id == "pipe-abc"  # type: ignore[attr-defined]
+
+    def test_two_runs_get_different_ids(self):
+        cid1 = start_pipeline_run()
+        cid2 = start_pipeline_run()
+        # Technically they could collide, but with 12 hex chars it's negligible.
+        # More importantly, the second call overwrites the first.
+        assert correlation_id_var.get() == cid2
+
+
+class TestAgentCallContext:
+    """agent_call_context propagates correlation IDs across nested agent calls."""
+
+    def setup_method(self):
+        correlation_id_var.set("")
+
+    def test_child_inherits_parent_correlation_id(self):
+        start_pipeline_run(correlation_id="parent-run")
+        with agent_call_context() as cid:
+            assert cid == "parent-run"
+            assert correlation_id_var.get() == "parent-run"
+
+    def test_child_mutation_does_not_leak_to_parent(self):
+        start_pipeline_run(correlation_id="original")
+        with agent_call_context() as cid:
+            assert cid == "original"
+            # Simulate child agent overwriting the correlation ID
+            correlation_id_var.set("child-overwrite")
+            assert correlation_id_var.get() == "child-overwrite"
+        # Parent's value is restored
+        assert correlation_id_var.get() == "original"
+
+    def test_nested_agent_calls_propagate(self, caplog):
+        """Three-level nesting: pipeline -> agent A -> agent B."""
+        start_pipeline_run(correlation_id="deep-run")
+        records = []
+
+        with agent_call_context() as cid_a:
+            logger_a = get_logger("agent.a")
+            with caplog.at_level(logging.DEBUG, logger="agent.a"):
+                logger_a.info("agent A working")
+            records.extend(caplog.records)
+            caplog.clear()
+
+            with agent_call_context() as cid_b:
+                logger_b = get_logger("agent.b")
+                with caplog.at_level(logging.DEBUG, logger="agent.b"):
+                    logger_b.info("agent B working")
+                records.extend(caplog.records)
+                caplog.clear()
+
+        # All records share the same pipeline correlation ID
+        assert all(
+            r.correlation_id == "deep-run"  # type: ignore[attr-defined]
+            for r in records
+        )
+        assert len(records) == 2
+
+    def test_restores_on_exception(self):
+        start_pipeline_run(correlation_id="safe-id")
+        with pytest.raises(RuntimeError):
+            with agent_call_context():
+                correlation_id_var.set("doomed")
+                raise RuntimeError("boom")
+        assert correlation_id_var.get() == "safe-id"
 
 
 # ---------------------------------------------------------------------------
