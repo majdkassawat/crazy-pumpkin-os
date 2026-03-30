@@ -351,3 +351,17 @@ class AgentMetrics:
     first_attempt_accepted: int = 0
     budget_spent_usd: float = 0.0
     recent_outcomes: list[bool] = field(default_factory=list)
+
+
+# ── Plugin ──────────────────────────────────────────────────────────
+
+@dataclass
+class PluginManifest:
+    """Descriptor for a discovered plugin."""
+    name: str = ""
+    version: str = ""
+    description: str = ""
+    entry_point: str = ""
+    plugin_type: str = ""  # "agent" or "provider"
+    min_framework_version: str = ""
+    permissions: list[str] = field(default_factory=list)
