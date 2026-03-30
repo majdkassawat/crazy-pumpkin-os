@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from crazypumpkin.dashboard.api import get_dashboard_data
+from crazypumpkin.dashboard.api import get_agent_statuses, get_dashboard_data
 from crazypumpkin.framework.agent import BaseAgent
 from crazypumpkin.framework.models import (
     Agent,
@@ -227,3 +227,82 @@ def test_empty_state():
     assert data["tasks"]["counts"] == {"planned": 0, "in_progress": 0, "completed": 0, "failed": 0}
     assert data["tasks"]["recent_completions"] == []
     assert data["errors"] == []
+
+
+# ── get_agent_statuses (GET /api/agents/status) ──
+
+
+def test_agent_statuses_returns_200_shape():
+    """GET /api/agents/status returns list of agent status objects."""
+    registry = AgentRegistry()
+    registry.register(_agent("alice"))
+    result = get_agent_statuses(registry)
+    assert isinstance(result, list)
+    assert len(result) == 1
+    entry = result[0]
+    assert isinstance(entry, dict)
+    for key in ("name", "status", "last_heartbeat", "tasks_completed", "health"):
+        assert key in entry
+
+
+def test_agent_statuses_field_types():
+    """Each agent object has correct field types."""
+    registry = AgentRegistry()
+    registry.register(_agent("bob"))
+    entry = get_agent_statuses(registry)[0]
+    assert isinstance(entry["name"], str)
+    assert isinstance(entry["status"], str)
+    assert entry["last_heartbeat"] is None or isinstance(entry["last_heartbeat"], str)
+    assert isinstance(entry["tasks_completed"], int)
+    assert isinstance(entry["health"], str)
+
+
+def test_agent_statuses_empty_registry():
+    """Endpoint returns empty list when no agents are registered."""
+    assert get_agent_statuses(AgentRegistry()) == []
+
+
+def test_agent_statuses_health_reflects_check():
+    """Health field reflects actual health_check result for each agent."""
+    registry = AgentRegistry()
+    healthy = _agent("healthy-agent")
+    registry.register(healthy)
+
+    disabled = _agent("disabled-agent", status=AgentStatus.DISABLED)
+    registry.register(disabled)
+
+    result = get_agent_statuses(registry)
+    by_name = {r["name"]: r for r in result}
+
+    assert by_name["healthy-agent"]["health"] == "healthy"
+    assert by_name["disabled-agent"]["health"] == "degraded"
+
+
+def test_agent_statuses_includes_all_registered():
+    """All registered agents appear in the result, including disabled."""
+    registry = AgentRegistry()
+    registry.register(_agent("a1"))
+    registry.register(_agent("a2"))
+    registry.register(_agent("a3", status=AgentStatus.DISABLED))
+    result = get_agent_statuses(registry)
+    assert len(result) == 3
+    names = {r["name"] for r in result}
+    assert names == {"a1", "a2", "a3"}
+
+
+def test_agent_statuses_status_value():
+    """Status field reflects the agent's current status string."""
+    registry = AgentRegistry()
+    registry.register(_agent("idle-one", status=AgentStatus.IDLE))
+    result = get_agent_statuses(registry)
+    assert result[0]["status"] == "idle"
+
+
+def test_agent_statuses_json_serializable():
+    """Agent status response must be JSON-serializable for the REST endpoint."""
+    registry = AgentRegistry()
+    registry.register(_agent("ser-agent"))
+    registry.register(_agent("dis-agent", status=AgentStatus.DISABLED))
+    result = get_agent_statuses(registry)
+    # Should not raise
+    json.dumps({"agents": result})
