@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ FRAMEWORK_VERSION = "0.1.0"
 ENTRY_POINT_GROUP = "crazypumpkin.plugins"
 REQUIRED_MANIFEST_FIELDS = ("name", "version", "entry_point", "plugin_type")
 
+_CONSTRAINT_RE = re.compile(r"(>=|<=|!=|==|>|<)(.+)")
+
 
 def _parse_version(version: str) -> tuple[int, ...]:
     """Parse a dotted version string into a comparable tuple."""
@@ -23,6 +26,106 @@ def _parse_version(version: str) -> tuple[int, ...]:
         return tuple(int(p) for p in version.split("."))
     except (ValueError, AttributeError):
         return (0,)
+
+
+def _parse_dependency_spec(spec: str) -> tuple[str, list[tuple[str, str]]]:
+    """Parse a dependency spec like ``plugin-name>=1.0,<2.0``.
+
+    Returns ``(name, [(operator, version), ...])``.
+    """
+    spec = spec.strip()
+    # Find the first operator character to split name from constraints
+    match = re.match(r"^([A-Za-z0-9_-]+)(.*)", spec)
+    if not match:
+        return (spec, [])
+
+    name = match.group(1)
+    rest = match.group(2).strip()
+    if not rest:
+        return (name, [])
+
+    constraints: list[tuple[str, str]] = []
+    for part in rest.split(","):
+        part = part.strip()
+        m = _CONSTRAINT_RE.match(part)
+        if m:
+            constraints.append((m.group(1), m.group(2).strip()))
+    return (name, constraints)
+
+
+def _version_satisfies(version: str, op: str, target: str) -> bool:
+    """Return True if *version* satisfies the constraint *op target*."""
+    v = _parse_version(version)
+    t = _parse_version(target)
+    # Pad to equal length so (1,0) and (1,0,0) compare as equal
+    max_len = max(len(v), len(t))
+    v = v + (0,) * (max_len - len(v))
+    t = t + (0,) * (max_len - len(t))
+    if op == ">=":
+        return v >= t
+    if op == "<=":
+        return v <= t
+    if op == ">":
+        return v > t
+    if op == "<":
+        return v < t
+    if op == "==":
+        return v == t
+    if op == "!=":
+        return v != t
+    return False
+
+
+def check_requires(
+    manifest: PluginManifest,
+    available_plugins: dict[str, str] | None = None,
+    framework_version: str | None = None,
+) -> list[str]:
+    """Check whether the plugin's ``requires`` dependencies are satisfied.
+
+    Args:
+        manifest: The plugin manifest to check.
+        available_plugins: Mapping of plugin name to version for loaded/available plugins.
+        framework_version: Current framework version.  Defaults to *FRAMEWORK_VERSION*.
+
+    Returns:
+        A list of error strings.  Empty means all requirements are met.
+    """
+    if not manifest.requires:
+        return []
+
+    if available_plugins is None:
+        available_plugins = {}
+    if framework_version is None:
+        framework_version = FRAMEWORK_VERSION
+
+    errors: list[str] = []
+
+    for dep_spec in manifest.requires:
+        name, constraints = _parse_dependency_spec(dep_spec)
+
+        if name in ("crazypumpkin", "cp-os"):
+            # Framework version constraint
+            for op, ver in constraints:
+                if not _version_satisfies(framework_version, op, ver):
+                    errors.append(
+                        f"Framework version {framework_version} does not satisfy "
+                        f"constraint '{name}{op}{ver}'"
+                    )
+        else:
+            # Plugin dependency
+            if name not in available_plugins:
+                errors.append(f"Required plugin '{name}' is not available")
+            elif constraints:
+                plugin_ver = available_plugins[name]
+                for op, ver in constraints:
+                    if not _version_satisfies(plugin_ver, op, ver):
+                        errors.append(
+                            f"Plugin '{name}' version {plugin_ver} does not satisfy "
+                            f"constraint '{name}{op}{ver}'"
+                        )
+
+    return errors
 
 
 def discover_plugins(plugins_dir: str | Path | None = None) -> list[PluginManifest]:
@@ -101,7 +204,10 @@ def validate_plugin(manifest: PluginManifest) -> list[str]:
     return errors
 
 
-def load_plugin(manifest: PluginManifest) -> Any:
+def load_plugin(
+    manifest: PluginManifest,
+    available_plugins: dict[str, str] | None = None,
+) -> Any:
     """Import and instantiate the plugin described by *manifest*.
 
     The entry-point string is either a dotted module path (the module's
@@ -110,12 +216,23 @@ def load_plugin(manifest: PluginManifest) -> Any:
     Plugin code runs inside a sandbox wrapper that catches exceptions and
     logs them without crashing the host.
 
+    Args:
+        manifest: The plugin manifest describing the plugin to load.
+        available_plugins: Mapping of plugin name to version string for
+            already-loaded plugins.  Used to check ``requires`` constraints.
+
     Returns the loaded plugin object, or ``None`` on failure.
     """
     errors = validate_plugin(manifest)
     if errors:
         for err in errors:
             logger.error("Plugin '%s' validation failed: %s", manifest.name, err)
+        return None
+
+    dep_errors = check_requires(manifest, available_plugins=available_plugins)
+    if dep_errors:
+        for err in dep_errors:
+            logger.error("Plugin '%s' dependency check failed: %s", manifest.name, err)
         return None
 
     try:

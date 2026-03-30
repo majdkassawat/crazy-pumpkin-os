@@ -365,3 +365,4 @@ class PluginManifest:
     plugin_type: str = ""  # "agent" or "provider"
     min_framework_version: str = ""
     permissions: list[str] = field(default_factory=list)
+    requires: list[str] = field(default_factory=list)
