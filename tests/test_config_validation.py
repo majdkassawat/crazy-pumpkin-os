@@ -149,3 +149,37 @@ def test_config_validation_error_message():
     """ConfigValidationError has a meaningful str representation."""
     exc = ConfigValidationError(["err1"])
     assert "err1" in str(exc)
+
+
+# -- Required test cases -------------------------------------------------------
+
+
+def test_default_config_is_valid():
+    assert validate_config(get_default_config()) == []
+
+
+def test_empty_config_has_errors():
+    assert len(validate_config({})) > 0
+
+
+def test_missing_agent_name_invalid():
+    cfg = get_default_config()
+    cfg["agents"] = [{"role": "execution"}]
+    errors = validate_config(cfg)
+    assert any("name" in e for e in errors)
+
+
+def test_merge_preserves_user_values():
+    user_agents = [{"name": "custom", "role": "strategy"}]
+    merged = merge_with_defaults({"agents": user_agents})
+    assert merged["agents"] == user_agents
+
+
+def test_get_default_config_returns_copy():
+    cfg = get_default_config()
+    cfg["agents"] = []
+    assert len(DEFAULT_CONFIG["agents"]) > 0
+
+
+def test_validation_error_stores_errors():
+    assert ConfigValidationError(["a", "b"]).errors == ["a", "b"]
