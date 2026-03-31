@@ -359,14 +359,18 @@ def cmd_goal(args):
 
 @friendly_errors
 def cmd_status(args):
-    """Show current company status."""
-    from crazypumpkin.framework.config import load_config
+    """Show agent health, trigger state, and runtime metrics."""
+    from crazypumpkin.cli.status import collect_status, format_status_table
 
-    config = load_config()
-    cycle_interval = config.pipeline.get("cycle_interval", 30)
-    print(f"Company: {config.company.get('name', 'Unknown')}")
-    print(f"cycle_interval: {cycle_interval}s")
-    print("Tasks — pending: 0  running: 0  complete: 0")
+    project_dir = Path(getattr(args, "project_dir", ".")).resolve()
+    json_output = getattr(args, "json", False)
+
+    status_data = collect_status(project_dir)
+
+    if json_output:
+        print(json.dumps(status_data, indent=2, default=str))
+    else:
+        print(format_status_table(status_data))
 
 
 @friendly_errors
@@ -496,7 +500,15 @@ def main():
     goal_parser.add_argument("name", help="Goal name")
     goal_parser.add_argument("description", nargs="?", default="", help="Goal description")
 
-    sub.add_parser("status", help="Show current company status")
+    status_parser = sub.add_parser("status", help="Show agent health, trigger state, and runtime metrics")
+    status_parser.add_argument(
+        "--project-dir", type=str, default=".",
+        help="Path to the project directory (default: current directory)",
+    )
+    status_parser.add_argument(
+        "--json", action="store_true", default=False,
+        help="Output status as JSON",
+    )
     sub.add_parser("wizard", help="Interactive configuration wizard")
     sub.add_parser("doctor", help="Check environment health")
 

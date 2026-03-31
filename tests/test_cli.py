@@ -264,48 +264,55 @@ class TestWriteInitFilesGitignore:
 # ── Tests for cmd_status ─────────────────────────────────────────────────
 
 
-def _make_status_args():
+def _make_status_args(project_dir=".", json_output=False):
     import argparse
-    return argparse.Namespace(command="status")
+    return argparse.Namespace(command="status", project_dir=project_dir, json=json_output)
 
 
-def _make_status_config(cycle_interval=30):
-    from unittest.mock import MagicMock
-    cfg = MagicMock()
-    cfg.company = {"name": "Test Co"}
-    cfg.pipeline = {"cycle_interval": cycle_interval}
-    return cfg
+def _make_status_data(agents=None, triggers=None, metrics=None):
+    return {
+        "agents": agents or [],
+        "triggers": triggers or [],
+        "metrics": metrics or {},
+    }
 
 
-def test_cmd_status_task_count_labels(capsys):
-    """cmd_status output includes task-count labels (pending, running, complete)."""
+def test_cmd_status_outputs_table(capsys):
+    """cmd_status prints formatted table when no --json flag."""
     from crazypumpkin.cli import cmd_status
-    with patch("crazypumpkin.framework.config.load_config", return_value=_make_status_config()):
+    data = _make_status_data(agents=[
+        {"name": "Dev", "state": "configured", "last_run": None, "error_count": 0},
+    ])
+    with patch("crazypumpkin.cli.status.collect_status", return_value=data):
         cmd_status(_make_status_args())
     out = capsys.readouterr().out
-    assert "pending" in out
-    assert "running" in out
-    assert "complete" in out
+    assert "Agents" in out
+    assert "Dev" in out
 
 
-def test_cmd_status_missing_config_raises(capsys):
-    """cmd_status exits with code 2 and friendly message when config.yaml is absent."""
+def test_cmd_status_missing_config_graceful(capsys):
+    """cmd_status prints empty table when config is absent (collect_status handles it)."""
     from crazypumpkin.cli import cmd_status
-    with patch("crazypumpkin.framework.config.load_config", side_effect=FileNotFoundError("no config")):
-        with pytest.raises(SystemExit) as exc_info:
-            cmd_status(_make_status_args())
-    assert exc_info.value.code == 2
-    err = capsys.readouterr().err
-    assert "File not found" in err
-
-
-def test_cmd_status_shows_cycle_interval(capsys):
-    """cmd_status prints the configured cycle_interval value."""
-    from crazypumpkin.cli import cmd_status
-    with patch("crazypumpkin.framework.config.load_config", return_value=_make_status_config(cycle_interval=45)):
+    data = _make_status_data()
+    with patch("crazypumpkin.cli.status.collect_status", return_value=data):
         cmd_status(_make_status_args())
     out = capsys.readouterr().out
-    assert "45" in out
+    assert "No agents configured" in out
+
+
+def test_cmd_status_json_output(capsys):
+    """cmd_status --json outputs valid JSON."""
+    import json as json_mod
+    from crazypumpkin.cli import cmd_status
+    data = _make_status_data(agents=[
+        {"name": "Dev", "state": "configured", "last_run": None, "error_count": 0},
+    ])
+    with patch("crazypumpkin.cli.status.collect_status", return_value=data):
+        cmd_status(_make_status_args(json_output=True))
+    out = capsys.readouterr().out
+    parsed = json_mod.loads(out)
+    assert "agents" in parsed
+    assert parsed["agents"][0]["name"] == "Dev"
 
 
 class TestWriteInitFilesReadme:
@@ -328,16 +335,16 @@ class TestWriteInitFilesReadme:
 class TestCmdStatus:
     """Tests for cmd_status registration, Namespace handling, and stdout."""
 
-    def _make_args(self):
+    def _make_args(self, json_output=False):
         import argparse
-        return argparse.Namespace(command="status")
+        return argparse.Namespace(command="status", project_dir=".", json=json_output)
 
-    def _make_config(self, cycle_interval=30, name="Test Co"):
-        from unittest.mock import MagicMock
-        cfg = MagicMock()
-        cfg.company = {"name": name}
-        cfg.pipeline = {"cycle_interval": cycle_interval}
-        return cfg
+    def _make_data(self, agents=None):
+        return {
+            "agents": agents or [],
+            "triggers": [],
+            "metrics": {},
+        }
 
     def test_registered_in_main_parser(self):
         """'status' subcommand is registered in the main CLI parser."""
@@ -350,38 +357,46 @@ class TestCmdStatus:
     def test_namespace_command_attr(self):
         """Namespace with command='status' is accepted without error."""
         from crazypumpkin.cli import cmd_status
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config()):
+        with patch("crazypumpkin.cli.status.collect_status",
+                   return_value=self._make_data()):
             cmd_status(self._make_args())  # should not raise
 
-    def test_stdout_contains_company_name(self, capsys):
-        """cmd_status prints the company name."""
+    def test_stdout_contains_agent_name(self, capsys):
+        """cmd_status prints agent names from collect_status."""
         from crazypumpkin.cli import cmd_status
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config(name="Skynet LLC")):
+        data = self._make_data(agents=[
+            {"name": "Skynet LLC", "state": "configured", "last_run": None, "error_count": 0},
+        ])
+        with patch("crazypumpkin.cli.status.collect_status", return_value=data):
             cmd_status(self._make_args())
         out = capsys.readouterr().out
         assert "Skynet LLC" in out
 
-    def test_stdout_contains_cycle_interval(self, capsys):
-        """cmd_status prints the cycle_interval."""
+    def test_stdout_contains_section_headers(self, capsys):
+        """cmd_status prints section headers (Agents, Triggers, Metrics)."""
         from crazypumpkin.cli import cmd_status
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config(cycle_interval=60)):
+        with patch("crazypumpkin.cli.status.collect_status",
+                   return_value=self._make_data()):
             cmd_status(self._make_args())
         out = capsys.readouterr().out
-        assert "60" in out
+        assert "Agents" in out
+        assert "Triggers" in out
+        assert "Metrics" in out
 
-    def test_stdout_contains_task_labels(self, capsys):
-        """cmd_status prints pending/running/complete task labels."""
+    def test_json_output_valid(self, capsys):
+        """cmd_status --json outputs valid JSON with expected keys."""
+        import json as json_mod
         from crazypumpkin.cli import cmd_status
-        with patch("crazypumpkin.framework.config.load_config",
-                   return_value=self._make_config()):
-            cmd_status(self._make_args())
+        data = self._make_data(agents=[
+            {"name": "Dev", "state": "configured", "last_run": None, "error_count": 0},
+        ])
+        with patch("crazypumpkin.cli.status.collect_status", return_value=data):
+            cmd_status(self._make_args(json_output=True))
         out = capsys.readouterr().out
-        assert "pending" in out
-        assert "running" in out
-        assert "complete" in out
+        parsed = json_mod.loads(out)
+        assert "agents" in parsed
+        assert "triggers" in parsed
+        assert "metrics" in parsed
 
 
 # ── TestCmdRunContinuous ──────────────────────────────────────────────────
