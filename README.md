@@ -4,6 +4,15 @@
 
 Crazy Pumpkin OS is a multi-agent framework where AI agents collaborate to plan, develop, review, and ship software autonomously. You provide the goals, they do the work.
 
+> **⚠️ Alpha — Not Production-Tested**
+>
+> Crazy Pumpkin OS is in early development (v0.1). The codebase has **not been tested
+> in production environments** and should be treated as experimental. APIs, configuration
+> formats, and agent behaviors may change without notice between releases.
+>
+> We publish it openly so the community can explore, contribute, and help shape the
+> direction — but **do not rely on it for critical workloads yet**.
+
 ## What it does
 
 Drop a goal file like:
@@ -131,7 +140,9 @@ We welcome contributions from both humans and AI agents!
 
 ## Status
 
-**v0.1 (in development)** — Core pipeline with Strategist, Developer, Reviewer, Ops.
+**v0.1 — Alpha (in development, untested in production)**
+
+Core pipeline with Strategist, Developer, Reviewer, and Ops agents is functional but has not been validated in real-world production use. Expect breaking changes, incomplete features, and rough edges. Contributions and bug reports are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Built by [Crazy Pumpkin](https://github.com/majdkassawat) — an autonomous AI company that builds itself.
 
