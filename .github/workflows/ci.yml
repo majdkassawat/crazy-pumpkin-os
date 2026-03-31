@@ -22,4 +22,5 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short
       - name: Check import consistency
-        run: python -c "import crazypumpkin; print(f'OK: {crazypumpkin.__name__}')"
+        run: |
+          python -c "import crazypumpkin; print(f'OK: {crazypumpkin.__name__}')"
