@@ -100,6 +100,46 @@ Then start the pipeline:
 crazy-pumpkin run --once
 ```
 
+## Checking Agent Status
+
+After running a pipeline, inspect agent health with `cpo status`:
+
+```bash
+$ cpo status
+Agents
+------------------------------------------------------------
+Name                      State           Last Run     Errors
+HelloAgent                healthy         2m ago       0
+ReviewerAgent             degraded        5m ago       3
+
+Triggers
+------------------------------------------------------------
+  HelloAgent: on_push
+  ReviewerAgent: cron(*/10 * * * *)
+
+Metrics
+------------------------------------------------------------
+  HelloAgent: executions=12, errors=0, duration=4.2s
+  ReviewerAgent: executions=8, errors=3, duration=18.7s
+```
+
+For programmatic consumption, use `--json`:
+
+```bash
+$ cpo status --json
+```
+```json
+{
+  "agents": [
+    {"name": "HelloAgent", "state": "healthy", "last_run": "2m ago", "error_count": 0}
+  ],
+  "triggers": [{"agent": "HelloAgent", "expression": "on_push"}],
+  "metrics": {"HelloAgent": {"executions": 12, "errors": 0, "total_duration": 4.2}}
+}
+```
+
+**Health states:** **healthy** — all recent executions succeeded. **degraded** — some errors occurred but the agent is still running. **unhealthy** — the agent has stopped or is consistently failing. Key metrics: *executions* (total runs), *errors* (failed runs), *duration* (cumulative wall-clock time).
+
 ## 5. Complete Working Example
 
 Copy this into `my_agent.py` and run it with `python my_agent.py`:
