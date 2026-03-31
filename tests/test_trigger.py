@@ -15,6 +15,7 @@ from crazypumpkin.framework.trigger import (
     ConditionalTrigger,
     CronTrigger,
     EventTrigger,
+    TriggerEvaluator,
     TriggerParseError,
     _Comparison,
     _LogicalOp,
@@ -437,6 +438,11 @@ class TestConditionalTrigger:
         with pytest.raises(KeyError):
             trigger.evaluate({"metrics": {}})
 
+    def test_conditional_trigger_string_comparison(self):
+        trigger = ConditionalTrigger('status == "active"')
+        assert trigger.evaluate({"status": "active"}) is True
+        assert trigger.evaluate({"status": "idle"}) is False
+
 
 # ---------------------------------------------------------------------------
 # CronTrigger
@@ -490,3 +496,89 @@ class TestCronTrigger:
             CronTrigger("abc")
         with pytest.raises(ValueError):
             CronTrigger("* * *")
+
+
+# ---------------------------------------------------------------------------
+# TriggerEvaluator — integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestTriggerEvaluator:
+    def test_evaluator_registers_and_checks_triggers(self):
+        """Register cron + event triggers, call evaluate_all, verify correct triggers fire."""
+        evaluator = TriggerEvaluator()
+
+        # Cron that fires at 09:00 every day
+        evaluator.register("morning-job", CronTrigger("0 9 * * *"))
+        # Event that fires on task_created
+        evaluator.register("on-task-created", EventTrigger(topic="task_created"))
+
+        now = datetime.datetime(2026, 3, 31, 9, 0, 0)
+        event = _FakeEvent(action="task_created")
+
+        fired = evaluator.evaluate_all(now=now, event=event)
+        assert "morning-job" in fired
+        assert "on-task-created" in fired
+
+        # At a different time with a non-matching event, neither fires
+        now_off = datetime.datetime(2026, 3, 31, 10, 0, 0)
+        event_off = _FakeEvent(action="task_completed")
+        fired_off = evaluator.evaluate_all(now=now_off, event=event_off)
+        assert "morning-job" not in fired_off
+        assert "on-task-created" not in fired_off
+
+    def test_evaluator_empty_triggers(self):
+        """evaluate_all returns empty list with no registered triggers."""
+        evaluator = TriggerEvaluator()
+        assert evaluator.evaluate_all() == []
+        assert evaluator.evaluate_all(
+            now=datetime.datetime(2026, 1, 1, 0, 0, 0),
+            event=_FakeEvent(action="anything"),
+            context={"x": 1},
+        ) == []
+
+    def test_evaluator_mixed_trigger_types(self):
+        """Register one of each type, assert only matching ones fire."""
+        evaluator = TriggerEvaluator()
+
+        # Cron: fires at minute=30 of any hour
+        evaluator.register("half-hour", CronTrigger("30 * * * *"))
+        # Event: fires on deploy_started
+        evaluator.register("deploy-hook", EventTrigger(topic="deploy_started"))
+        # Conditional: fires when cpu > 80
+        evaluator.register("high-cpu", ConditionalTrigger("cpu > 80"))
+
+        now = datetime.datetime(2026, 3, 31, 14, 30, 0)
+        event = _FakeEvent(action="build_complete")  # does NOT match deploy_started
+        context = {"cpu": 95}
+
+        fired = evaluator.evaluate_all(now=now, event=event, context=context)
+        assert "half-hour" in fired
+        assert "deploy-hook" not in fired  # event doesn't match
+        assert "high-cpu" in fired
+
+    def test_evaluator_conditional_only_fires_when_context_provided(self):
+        """ConditionalTrigger should not fire when no context is given."""
+        evaluator = TriggerEvaluator()
+        evaluator.register("check-memory", ConditionalTrigger("memory > 70"))
+        assert evaluator.evaluate_all() == []
+        assert evaluator.evaluate_all(context={"memory": 90}) == ["check-memory"]
+
+    def test_evaluator_event_only_fires_when_event_provided(self):
+        """EventTrigger should not fire when no event is given."""
+        evaluator = TriggerEvaluator()
+        evaluator.register("on-alert", EventTrigger(topic="alert_*"))
+        assert evaluator.evaluate_all() == []
+        assert evaluator.evaluate_all(event=_FakeEvent(action="alert_critical")) == [
+            "on-alert"
+        ]
+
+    def test_evaluator_triggers_property(self):
+        """triggers property returns a copy of registered triggers."""
+        evaluator = TriggerEvaluator()
+        evaluator.register("t1", CronTrigger("0 0 * * *"))
+        triggers = evaluator.triggers
+        assert "t1" in triggers
+        # Mutating returned dict does not affect evaluator
+        triggers["t2"] = "fake"
+        assert "t2" not in evaluator.triggers
