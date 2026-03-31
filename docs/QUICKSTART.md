@@ -100,6 +100,20 @@ Then start the pipeline:
 crazy-pumpkin run --once
 ```
 
+### Check Pipeline Status
+
+Use the `status` command to see active projects, task breakdown, agent health, and recent activity:
+
+```bash
+crazy-pumpkin status
+```
+
+For machine-readable output (useful for scripts and CI):
+
+```bash
+crazy-pumpkin status --json
+```
+
 ## 5. Complete Working Example
 
 Copy this into `my_agent.py` and run it with `python my_agent.py`:
