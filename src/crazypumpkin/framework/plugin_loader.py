@@ -266,6 +266,65 @@ def load_plugin(
         return None
 
 
+class PluginLoader:
+    """High-level plugin discovery and loading."""
+
+    def __init__(self, config_plugins: list[PluginManifest] | None = None) -> None:
+        self._config_plugins: dict[str, PluginManifest] = {
+            p.name: p for p in (config_plugins or [])
+        }
+
+    def discover_entrypoint_plugins(
+        self, group: str = ENTRY_POINT_GROUP
+    ) -> list[PluginManifest]:
+        """Discover plugins registered as Python entry points.
+
+        Each entry point's ``load()`` should return a dict of
+        :class:`PluginManifest` fields.  If a config plugin with the same
+        name was provided at construction time, it takes precedence.
+        """
+        from importlib.metadata import entry_points as _entry_points
+
+        try:
+            if sys.version_info >= (3, 12):
+                eps = _entry_points(group=group)
+            else:
+                all_eps = _entry_points()
+                eps = all_eps.get(group, [])  # type: ignore[union-attr]
+        except Exception:
+            eps = []
+
+        manifests: list[PluginManifest] = []
+        for ep in eps:
+            if ep.name in self._config_plugins:
+                manifests.append(self._config_plugins[ep.name])
+                continue
+            try:
+                loaded = ep.load()
+                if isinstance(loaded, dict):
+                    manifests.append(PluginManifest(**loaded))
+                elif isinstance(loaded, PluginManifest):
+                    manifests.append(loaded)
+                else:
+                    manifests.append(
+                        PluginManifest(
+                            name=ep.name,
+                            entry_point=ep.value,
+                            plugin_type="agent",
+                        )
+                    )
+            except ImportError as exc:
+                logger.warning(
+                    "Entry-point '%s' failed to load: %s", ep.name, exc
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Entry-point '%s' error: %s", ep.name, exc
+                )
+
+        return manifests
+
+
 def _sandbox_call(manifest: PluginManifest, plugin_cls: Any) -> Any:
     """Instantiate *plugin_cls* inside a sandbox that catches exceptions."""
     try:
