@@ -85,6 +85,9 @@ def get_dashboard_data(
         })
         total_usd += m.budget_spent_usd
 
+    # ── Session costs ──
+    per_session_costs = store.get_session_costs()
+
     return {
         "agents": agents,
         "tasks": {
@@ -95,5 +98,6 @@ def get_dashboard_data(
         "costs": {
             "per_agent": per_agent_costs,
             "total_usd": round(total_usd, 4),
+            "per_session": per_session_costs,
         },
     }

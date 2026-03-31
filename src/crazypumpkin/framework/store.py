@@ -16,7 +16,8 @@ from typing import Any
 from crazypumpkin.framework.models import (
     Agent, AgentConfig, AgentMetrics, Approval, ApprovalStatus, ChangeProposal,
     Project, ProjectStatus, ProposalStatus, ProposalType, Review,
-    ReviewDecision, Task, TaskOutput, TaskStatus,
+    ReviewDecision, RunRecord, Session, SessionMessage, SessionStatus,
+    Task, TaskOutput, TaskStatus,
 )
 
 
@@ -45,6 +46,8 @@ class Store:
         self.approvals: dict[str, Approval] = {}
         self.proposals: dict[str, ChangeProposal] = {}
         self._agent_metrics: dict[str, AgentMetrics] = {}
+        self.sessions: dict[str, Session] = {}
+        self._run_records: dict[str, RunRecord] = {}
         self._data_dir = data_dir
         if data_dir:
             data_dir.mkdir(parents=True, exist_ok=True)
@@ -194,6 +197,80 @@ class Store:
                 ", ".join(f"{k}={v}" for k, v in totals.items() if v > 0),
             )
         return totals
+
+    # ── Sessions ──
+
+    def create_session(self, session: Session) -> None:
+        self.sessions[session.id] = session
+
+    def get_session(self, session_id: str) -> Session | None:
+        return self.sessions.get(session_id)
+
+    def sessions_by_agent(self, agent_id: str) -> list[Session]:
+        return [s for s in self.sessions.values() if s.agent_id == agent_id]
+
+    def append_session_message(self, session_id: str, message: SessionMessage) -> None:
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise KeyError(f"Session '{session_id}' not found")
+        if session.status == SessionStatus.CLOSED:
+            raise ValueError(f"Cannot append to closed session '{session_id}'")
+        session.messages.append(message)
+
+    def record_session_cost(self, session_id: str, cost_usd: float) -> None:
+        """Add cost to a session's cumulative total."""
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise KeyError(f"Session '{session_id}' not found")
+        session.total_cost_usd += cost_usd
+
+    def get_session_costs(self) -> list[dict]:
+        """Return a list of per-session cost summaries."""
+        results = []
+        for s in self.sessions.values():
+            results.append({
+                "session_id": s.id,
+                "agent_id": s.agent_id,
+                "model": s.model,
+                "status": s.status.value,
+                "total_cost_usd": s.total_cost_usd,
+                "message_count": len(s.messages),
+            })
+        return results
+
+    def close_session(self, session_id: str) -> None:
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise KeyError(f"Session '{session_id}' not found")
+        if session.status == SessionStatus.CLOSED:
+            raise ValueError(f"Session '{session_id}' already closed")
+        session.status = SessionStatus.CLOSED
+        from datetime import datetime, timezone
+        session.closed_at = datetime.now(timezone.utc).isoformat()
+
+    # ── Run Records ──
+
+    async def save_run_record(self, record: RunRecord) -> None:
+        self._run_records[record.run_id] = record
+
+    async def get_run_record(self, run_id: str) -> RunRecord | None:
+        return self._run_records.get(run_id)
+
+    async def list_run_records(
+        self,
+        *,
+        agent_name: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[RunRecord]:
+        records = list(self._run_records.values())
+        if agent_name is not None:
+            records = [r for r in records if r.agent_name == agent_name]
+        if status is not None:
+            records = [r for r in records if r.status == status]
+        records.sort(key=lambda r: r.started_at, reverse=True)
+        return records[offset:offset + limit]
 
     def compute_digest_stats(self, window_hours: int = 24) -> dict:
         from datetime import datetime, timezone, timedelta
@@ -487,6 +564,7 @@ class Store:
                 "approvals": {k: _to_dict(v) for k, v in self.approvals.items()},
                 "proposals": proposals_dict,
                 "agent_metrics": {k: _to_dict(v) for k, v in self._agent_metrics.items()},
+                "sessions": {k: _to_dict(v) for k, v in self.sessions.items()},
             }
             path = self._data_dir / "state.json"
             path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
@@ -590,5 +668,26 @@ class Store:
                 budget_spent_usd=d.get("budget_spent_usd", 0.0),
                 recent_outcomes=d.get("recent_outcomes", []),
             )
+
+        for k, d in raw.get("sessions", {}).items():
+            session = Session(
+                id=d.get("id", k),
+                agent_id=d.get("agent_id", ""),
+                model=d.get("model", ""),
+                status=SessionStatus(d.get("status", "open")),
+                created_at=d.get("created_at", ""),
+                closed_at=d.get("closed_at", ""),
+                total_cost_usd=d.get("total_cost_usd", 0.0),
+            )
+            session.messages = [
+                SessionMessage(
+                    role=m.get("role", ""),
+                    content=m.get("content", ""),
+                    timestamp=m.get("timestamp", ""),
+                    metadata=m.get("metadata", {}),
+                )
+                for m in d.get("messages", [])
+            ]
+            self.sessions[k] = session
 
         return True

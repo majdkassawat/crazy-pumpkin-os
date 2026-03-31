@@ -366,3 +366,48 @@ class PluginManifest:
     min_framework_version: str = ""
     permissions: list[str] = field(default_factory=list)
     requires: list[str] = field(default_factory=list)
+
+
+# ── Session ────────────────────────────────────────────────────────
+
+
+class SessionStatus(str, Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+@dataclass
+class SessionMessage:
+    """A single message in a session conversation."""
+    role: str = ""
+    content: str = ""
+    timestamp: str = field(default_factory=_now)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Session:
+    """A multi-turn conversation session between an agent and an LLM."""
+    id: str = field(default_factory=_uid)
+    agent_id: str = ""
+    model: str = ""
+    status: SessionStatus = SessionStatus.OPEN
+    messages: list[SessionMessage] = field(default_factory=list)
+    created_at: str = field(default_factory=_now)
+    closed_at: str = ""
+    total_cost_usd: float = 0.0
+
+
+# ── Run Record ─────────────────────────────────────────────────────
+
+
+@dataclass
+class RunRecord:
+    """Record of a single agent execution run."""
+    run_id: str = field(default_factory=_uid)
+    agent_name: str = ""
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: datetime | None = None
+    status: str = ""  # "success", "failure"
+    duration_ms: float | None = None
+    error: str | None = None

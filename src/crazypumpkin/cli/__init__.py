@@ -16,6 +16,7 @@ import functools
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -393,6 +394,11 @@ def cmd_install_plugin(args):
 
     package = args.package
 
+    # Validate package name to prevent command injection
+    if not re.match(r'^[A-Za-z0-9_.\-]+(==?[A-Za-z0-9_.!\-]+)?$', package):
+        print(f"Invalid package name: '{package}'", file=sys.stderr)
+        sys.exit(1)
+
     # pip install the package
     print(f"Installing plugin '{package}' ...")
     result = subprocess.run(
@@ -606,9 +612,95 @@ def cmd_session_start(args):
 
 
 @friendly_errors
+def cmd_session_list(args):
+    """List sessions, optionally filtered by agent or status."""
+    from crazypumpkin.framework.models import Session, SessionStatus
+    from crazypumpkin.framework.store import Store
+
+    data_dir = Path.cwd() / "data"
+    store = Store(data_dir)
+    store.load()
+
+    sessions = list(store.sessions.values())
+    agent_filter = getattr(args, "agent", None)
+    status_filter = getattr(args, "status", None)
+    if agent_filter:
+        sessions = [s for s in sessions if s.agent_id == agent_filter]
+    if status_filter:
+        sessions = [s for s in sessions if s.status.value == status_filter]
+
+    if not sessions:
+        print("No sessions found.")
+        return
+
+    for s in sessions:
+        msg_count = len(s.messages)
+        print(f"{s.id}  agent={s.agent_id}  model={s.model}  status={s.status.value}  messages={msg_count}")
+
+
+@friendly_errors
+def cmd_session_show(args):
+    """Show details of a single session."""
+    from crazypumpkin.framework.models import Session
+    from crazypumpkin.framework.store import Store
+
+    data_dir = Path.cwd() / "data"
+    store = Store(data_dir)
+    store.load()
+
+    session = store.get_session(args.session_id)
+    if session is None:
+        print(f"Session '{args.session_id}' not found.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Session: {session.id}")
+    print(f"Agent: {session.agent_id}")
+    print(f"Model: {session.model}")
+    print(f"Status: {session.status.value}")
+    print(f"Messages: {len(session.messages)}")
+    print()
+    for i, msg in enumerate(session.messages, 1):
+        print(f"[{i}] {msg.role.upper()}: {msg.content}")
+
+
+@friendly_errors
+def cmd_session_replay(args):
+    """Replay a session's messages."""
+    import time as _time
+    from crazypumpkin.framework.models import Session
+    from crazypumpkin.framework.store import Store
+
+    data_dir = Path.cwd() / "data"
+    store = Store(data_dir)
+    store.load()
+
+    session = store.get_session(args.session_id)
+    if session is None:
+        print(f"Session '{args.session_id}' not found.", file=sys.stderr)
+        sys.exit(1)
+
+    msg_count = len(session.messages)
+    print(f"Replaying session {session.id} ({msg_count} messages)")
+
+    speed = getattr(args, "speed", 0)
+    for i, msg in enumerate(session.messages, 1):
+        if speed and i > 1:
+            _time.sleep(speed)
+        print(f"Turn {i}: {msg.role.upper()}")
+        print(f"  {msg.content}")
+
+    print("Replay complete.")
+
+
+@friendly_errors
 def cmd_remove_plugin(args):
     """Uninstall a plugin package or remove a local plugin directory."""
     package = args.package
+
+    # Validate package name to prevent command injection
+    if not re.match(r'^[A-Za-z0-9_.\-]+(==?[A-Za-z0-9_.!\-]+)?$', package):
+        print(f"Invalid package name: '{package}'", file=sys.stderr)
+        sys.exit(1)
 
     # Check for local plugin directory first
     plugins_dir = Path(__file__).resolve().parent / "plugins"
@@ -850,6 +942,7 @@ def cli_run(agent_name, config_path, param, timeout):
 def cmd_cost(args):
     """Display LLM cost tracking summary."""
     from crazypumpkin.observability.metrics import get_llm_cost_snapshot
+    from crazypumpkin.framework.store import Store
 
     snap = get_llm_cost_snapshot()
 
@@ -869,6 +962,23 @@ def cmd_cost(args):
             prompt = info.get("prompt_tokens", info.get("total_prompt_tokens", 0))
             completion = info.get("completion_tokens", info.get("total_completion_tokens", 0))
             print(f"  {model_name}: ${cost:.4f} | {calls} calls | {prompt}+{completion} tokens")
+
+    # Per-session cost breakdown
+    data_dir = Path.cwd() / "data"
+    store = Store(data_dir)
+    store.load()
+    session_costs = store.get_session_costs()
+    session_costs = [sc for sc in session_costs if sc["total_cost_usd"] > 0]
+    if session_costs:
+        print("\nPer-session costs:")
+        for sc in session_costs:
+            print(
+                f"  {sc['session_id']}: ${sc['total_cost_usd']:.4f}"
+                f" | agent={sc['agent_id']}"
+                f" | model={sc['model']}"
+                f" | msgs={sc['message_count']}"
+                f" | {sc['status']}"
+            )
 
 
 @friendly_errors
@@ -1021,6 +1131,17 @@ def main():
         "agent_name", help="Name of the agent to start a session with",
     )
 
+    session_list_parser = sub.add_parser("session-list", help="List sessions")
+    session_list_parser.add_argument("--agent", type=str, default=None, help="Filter by agent")
+    session_list_parser.add_argument("--status", type=str, default=None, help="Filter by status")
+
+    session_show_parser = sub.add_parser("session-show", help="Show session details")
+    session_show_parser.add_argument("session_id", help="Session ID to show")
+
+    session_replay_parser = sub.add_parser("session-replay", help="Replay a session")
+    session_replay_parser.add_argument("session_id", help="Session ID to replay")
+    session_replay_parser.add_argument("--speed", type=float, default=0, help="Delay between messages")
+
     args = parser.parse_args()
 
     from crazypumpkin.cli.doctor import cmd_doctor
@@ -1044,6 +1165,9 @@ def main():
         "session-start": cmd_session_start,
         "cost": cmd_cost,
         "config-template": cmd_config_template,
+        "session-list": cmd_session_list,
+        "session-show": cmd_session_show,
+        "session-replay": cmd_session_replay,
     }
 
     if args.command == "schedule":
