@@ -1,12 +1,13 @@
 """CLI entry point for Crazy Pumpkin OS.
 
 Commands:
-    crazypumpkin init       — Set up a new AI company
-    crazypumpkin run        — Start the pipeline (continuous)
-    crazypumpkin dashboard  — Start the web dashboard
-    crazypumpkin goal       — Create a new goal
-    crazypumpkin status     — Show current company status
-    crazypumpkin logs       — Tail pipeline log files
+    cpos init       — Set up a new AI company
+    cpos run        — Start the pipeline (continuous)
+    cpos run-agent  — Run a single agent on-demand
+    cpos dashboard  — Start the web dashboard
+    cpos goal       — Create a new goal
+    cpos status     — Show current company status
+    cpos logs       — Tail pipeline log files
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -317,6 +319,123 @@ def cmd_run(args):
 
 
 @friendly_errors
+def cmd_run_agent(args):
+    """Run a single agent on-demand by name.
+
+    Looks up the agent in the registry by *agent_name*, optionally
+    loads an alternate config file (``--config``), passes extra
+    key=value parameters (``--param``) into the context, and enforces
+    an optional ``--timeout`` (in seconds).
+    """
+    from crazypumpkin.framework.config import load_config
+    from crazypumpkin.framework.models import Task
+    from crazypumpkin.framework import registry as _reg
+
+    logger = logging.getLogger('crazypumpkin.cli')
+
+    agent_name: str = args.agent_name
+    config_path: str | None = getattr(args, "config", None)
+    params: list[str] = getattr(args, "param", None) or []
+    timeout: int | None = getattr(args, "timeout", None)
+
+    # Validate agent_name is non-empty
+    if not agent_name or not agent_name.strip():
+        print("Error: agent_name is required", file=sys.stderr)
+        sys.exit(2)
+
+    # Load config (from custom path or default)
+    if config_path:
+        config = load_config(project_root=Path(config_path).parent)
+    else:
+        config = load_config()
+
+    # Build context from --param key=value pairs
+    context: dict = {}
+    for p in params:
+        if "=" not in p:
+            print(f"Invalid --param format: '{p}' (expected key=value)", file=sys.stderr)
+            sys.exit(1)
+        key, value = p.split("=", 1)
+        context[key] = value
+
+    logger.debug('Params: %s', params)
+
+    # Look up agent
+    logger.info('Resolving agent: %s', agent_name)
+    agent = _reg.default_registry.by_name(agent_name)
+    if agent is None:
+        # Try to load from config agent definitions
+        agent_def = next((a for a in config.agents if a.name == agent_name), None)
+        if agent_def and agent_def.class_path:
+            import importlib
+            try:
+                module_path, class_name = agent_def.class_path.rsplit(".", 1)
+                mod = importlib.import_module(module_path)
+                cls = getattr(mod, class_name)
+                from crazypumpkin.framework.models import Agent as AgentModel, deterministic_id
+                agent_model = AgentModel(
+                    id=deterministic_id(agent_name),
+                    name=agent_name,
+                    role=agent_def.role,
+                )
+                agent = cls(agent_model)
+                _reg.default_registry.register(agent)
+            except Exception as exc:
+                print(f"Failed to load agent class '{agent_def.class_path}': {exc}", file=sys.stderr)
+                if context.get("debug") == "true":
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
+                sys.exit(1)
+        else:
+            print(f"Agent not found: '{agent_name}'", file=sys.stderr)
+            print(f"Available agents: {', '.join(a.name for a in config.agents)}", file=sys.stderr)
+            sys.exit(1)
+
+    class_path = f"{type(agent).__module__}.{type(agent).__qualname__}"
+    logger.info('Agent resolved: %s (class=%s)', agent_name, class_path)
+
+    # Create an ad-hoc task
+    task = Task(
+        title=f"On-demand run: {agent_name}",
+        description=f"Ad-hoc execution of agent '{agent_name}' via CLI",
+    )
+
+    print(f"Running agent '{agent_name}' ...")
+    start = time.time()
+
+    if timeout is not None:
+        import signal
+
+        def _timeout_handler(signum, frame):
+            raise TimeoutError(f"Agent '{agent_name}' timed out after {timeout}s")
+
+        # On Windows, SIGALRM is not available; fall back to no-op
+        if hasattr(signal, "SIGALRM"):
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(timeout)
+
+    try:
+        result = agent.run(task, context=context)
+    except TimeoutError as exc:
+        elapsed = time.time() - start
+        print(f"\nTimeout: {exc}", file=sys.stderr)
+        sys.exit(2)
+    finally:
+        if timeout is not None and hasattr(signal, "SIGALRM"):
+            signal.alarm(0)
+
+    elapsed = time.time() - start
+    logger.info('Agent %s completed in %.2fs', agent_name, elapsed)
+    print(f"\nAgent: {agent_name}")
+    print(f"Status: success")
+    print(f"Duration: {elapsed:.2f}s")
+    if result.content:
+        print(f"Output: {result.content}")
+    if result.artifacts:
+        print(f"Artifacts: {', '.join(result.artifacts.keys())}")
+
+
+@friendly_errors
 def cmd_dashboard(args):
     """Start the web dashboard.
 
@@ -475,6 +594,10 @@ def main():
     )
     run_parser = sub.add_parser("run", help="Start the pipeline")
     run_parser.add_argument(
+        "agent_name", nargs="?", default=None,
+        help="Agent name to run (dispatches to run-agent mode)",
+    )
+    run_parser.add_argument(
         "--once", action="store_true", default=False,
         help="Execute a single cycle then exit",
     )
@@ -482,6 +605,33 @@ def main():
         "--interval", type=int, default=None,
         help="Override pipeline.cycle_interval (seconds between cycles)",
     )
+    run_parser.add_argument(
+        "--config", dest="config_path", default=None,
+        help="Config file override (used with agent_name)",
+    )
+    run_parser.add_argument(
+        "--param", action="append", default=[],
+        help="key=value parameter (used with agent_name, repeatable)",
+    )
+    run_agent_parser = sub.add_parser(
+        "run-agent", help="Run a single agent on-demand",
+    )
+    run_agent_parser.add_argument(
+        "agent_name", help="Name of the agent to run",
+    )
+    run_agent_parser.add_argument(
+        "--config", type=str, default=None,
+        help="Path to an alternate config file",
+    )
+    run_agent_parser.add_argument(
+        "--param", action="append", default=None,
+        help="Key=value parameter passed to the agent context (repeatable)",
+    )
+    run_agent_parser.add_argument(
+        "--timeout", type=int, default=None,
+        help="Maximum execution time in seconds",
+    )
+
     dashboard_parser = sub.add_parser("dashboard", help="Start the web dashboard")
     dashboard_parser.add_argument(
         "--watch", action="store_true", default=False,
@@ -540,9 +690,20 @@ def main():
     from crazypumpkin.cli.logs import cmd_logs
     from crazypumpkin.cli.wizard import run_wizard
 
+    def _dispatch_run(args):
+        if args.agent_name:
+            # Normalize: run subparser stores --config as config_path,
+            # but cmd_run_agent expects args.config
+            if not hasattr(args, "config") or args.config is None:
+                args.config = getattr(args, "config_path", None)
+            cmd_run_agent(args)
+        else:
+            cmd_run(args)
+
     commands = {
         "init": cmd_init,
-        "run": cmd_run,
+        "run": _dispatch_run,
+        "run-agent": cmd_run_agent,
         "dashboard": cmd_dashboard,
         "goal": cmd_goal,
         "status": cmd_status,
