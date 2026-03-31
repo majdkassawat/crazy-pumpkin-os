@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -44,6 +46,7 @@ class SlackWebhookChannel(NotificationChannel):
     ) -> None:
         if not webhook_url:
             raise ValueError("webhook_url is required")
+        self._validate_webhook_url(webhook_url)
         self.webhook_url = webhook_url
         self.channel = channel
         self.username = username
@@ -121,6 +124,37 @@ class SlackWebhookChannel(NotificationChannel):
         return count
 
     # -- Internal -------------------------------------------------------------
+
+    @staticmethod
+    def _validate_webhook_url(url: str) -> None:
+        """Validate that *url* is a safe, external HTTP(S) URL.
+
+        Rejects localhost, loopback, and private/reserved IP ranges to
+        prevent SSRF attacks.
+        """
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(
+                f"webhook_url must use http or https scheme, got {parsed.scheme!r}"
+            )
+        hostname = parsed.hostname
+        if not hostname:
+            raise ValueError("webhook_url must include a hostname")
+        # Reject well-known localhost aliases.
+        if hostname in ("localhost",):
+            raise ValueError(
+                f"webhook_url must not point to localhost ({hostname})"
+            )
+        # If the hostname is an IP literal, check for private/reserved ranges.
+        try:
+            addr = ipaddress.ip_address(hostname)
+        except ValueError:
+            pass  # Not an IP literal — regular hostname, allowed.
+        else:
+            if addr.is_loopback or addr.is_private or addr.is_reserved or addr.is_link_local:
+                raise ValueError(
+                    f"webhook_url must not point to a private or reserved address ({hostname})"
+                )
 
     def _build_payload(self, data: dict[str, Any]) -> dict[str, Any]:
         """Build the full webhook payload with optional overrides."""
