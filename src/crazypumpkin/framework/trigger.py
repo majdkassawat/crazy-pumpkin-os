@@ -11,6 +11,8 @@ Sentinels: ``always`` (True), ``never`` (False), ``schedule`` (True)
 
 from __future__ import annotations
 
+import datetime as _dt
+import fnmatch
 import re
 from typing import Any
 
@@ -34,7 +36,7 @@ _TOKEN_RE = re.compile(
     (?P<OP>       >=|<=|==|>|<     )   |
     (?P<AND>      \bAND\b          )   |
     (?P<OR>       \bOR\b           )   |
-    (?P<IDENT>    [A-Za-z_]\w*     )   |
+    (?P<IDENT>    [A-Za-z_]\w*(?:\.\w+)* )   |
     (?P<WS>       \s+              )
     """,
     re.VERBOSE,
@@ -218,17 +220,35 @@ _CMP_OPS = {
 }
 
 
+def _resolve_key(snapshot: dict[str, Any], key: str) -> Any:
+    """Resolve a potentially dotted key path in *snapshot*.
+
+    Tries a direct lookup first, then walks nested dicts for dotted paths
+    like ``metrics.cpu``.
+    """
+    if key in snapshot:
+        return snapshot[key]
+    parts = key.split(".")
+    if len(parts) > 1:
+        val: Any = snapshot
+        for part in parts:
+            if isinstance(val, dict) and part in val:
+                val = val[part]
+            else:
+                raise KeyError(
+                    f"Snapshot is missing required key: {key!r}"
+                )
+        return val
+    raise KeyError(f"Snapshot is missing required key: {key!r}")
+
+
 def _evaluate(node: Any, snapshot: dict[str, Any]) -> bool:
     """Walk the AST and return a boolean result."""
     if isinstance(node, _Sentinel):
         return node.value
 
     if isinstance(node, _Comparison):
-        if node.left not in snapshot:
-            raise KeyError(
-                f"Snapshot is missing required key: {node.left!r}"
-            )
-        left_val = snapshot[node.left]
+        left_val = _resolve_key(snapshot, node.left)
         return _CMP_OPS[node.op](left_val, node.right)
 
     if isinstance(node, _LogicalOp):
@@ -265,3 +285,131 @@ def evaluate_trigger(expr: str, snapshot: dict[str, Any]) -> bool:
     """
     ast = parse_trigger(expr)
     return _evaluate(ast, snapshot)
+
+
+# ---------------------------------------------------------------------------
+# High-level trigger classes
+# ---------------------------------------------------------------------------
+
+
+class EventTrigger:
+    """Trigger that matches events by topic (action) pattern.
+
+    Supports exact matches and glob-style wildcards via :mod:`fnmatch`.
+    """
+
+    def __init__(self, topic: str) -> None:
+        self.topic = topic
+
+    def matches(self, event: Any) -> bool:
+        """Return ``True`` if *event*'s action matches this trigger's topic."""
+        action: str = getattr(event, "action", "")
+        if self.topic == "*":
+            return True
+        return fnmatch.fnmatch(action, self.topic)
+
+
+class ConditionalTrigger:
+    """Trigger that evaluates a comparison expression against a context dict.
+
+    Wraps :func:`evaluate_trigger` for convenient reuse.
+    """
+
+    def __init__(self, expression: str) -> None:
+        self.expression = expression
+        # Eagerly parse so syntax errors surface at construction time.
+        self._ast = parse_trigger(expression)
+
+    def evaluate(self, context: dict[str, Any]) -> bool:
+        """Return ``True`` if *context* satisfies the expression."""
+        return _evaluate(self._ast, context)
+
+
+class CronTrigger:
+    """Trigger that fires based on a cron schedule expression.
+
+    Supports standard 5-field cron:
+    ``minute hour day_of_month month day_of_week``
+    """
+
+    _DAY_NAMES: dict[str, int] = {
+        "SUN": 0, "MON": 1, "TUE": 2, "WED": 3,
+        "THU": 4, "FRI": 5, "SAT": 6,
+    }
+
+    def __init__(self, expression: str) -> None:
+        self.expression = expression
+        self._fields = self._parse(expression)
+
+    def _parse(self, expression: str) -> list[set[int]]:
+        parts = expression.strip().split()
+        if len(parts) != 5:
+            raise ValueError(
+                f"Cron expression must have 5 fields, got {len(parts)}: {expression!r}"
+            )
+        ranges = [
+            (0, 59),  # minute
+            (0, 23),  # hour
+            (1, 31),  # day of month
+            (1, 12),  # month
+            (0, 6),   # day of week
+        ]
+        name_maps: list[dict[str, int] | None] = [
+            None, None, None, None, self._DAY_NAMES,
+        ]
+        fields: list[set[int]] = []
+        for part, (lo, hi), nmap in zip(parts, ranges, name_maps):
+            fields.append(self._parse_field(part, lo, hi, nmap))
+        return fields
+
+    @staticmethod
+    def _parse_field(
+        field: str, lo: int, hi: int, name_map: dict[str, int] | None = None,
+    ) -> set[int]:
+        values: set[int] = set()
+        for item in field.split(","):
+            if name_map:
+                upper = item.upper()
+                for name, val in name_map.items():
+                    upper = upper.replace(name, str(val))
+                item = upper
+            if "/" in item:
+                range_part, step_str = item.split("/", 1)
+                step = int(step_str)
+                if step <= 0:
+                    raise ValueError(
+                        f"Step value must be positive, got {step} in {field!r}"
+                    )
+                if range_part == "*":
+                    values.update(range(lo, hi + 1, step))
+                else:
+                    start = int(range_part)
+                    values.update(range(start, hi + 1, step))
+            elif item == "*":
+                values.update(range(lo, hi + 1))
+            elif "-" in item:
+                start_str, end_str = item.split("-", 1)
+                values.update(range(int(start_str), int(end_str) + 1))
+            else:
+                val = int(item)
+                if val < lo or val > hi:
+                    raise ValueError(
+                        f"Value {val} out of range [{lo}, {hi}] in {field!r}"
+                    )
+                values.add(val)
+        return values
+
+    def should_fire(self, now: _dt.datetime | None = None) -> bool:
+        """Return ``True`` if the cron expression matches *now*."""
+        if now is None:
+            now = _dt.datetime.now()
+        minute, hour, day, month, dow = self._fields
+        # isoweekday: Mon=1..Sun=7 → cron: Sun=0..Sat=6
+        cron_dow = now.isoweekday() % 7
+        return (
+            now.minute in minute
+            and now.hour in hour
+            and now.day in day
+            and now.month in month
+            and cron_dow in dow
+        )

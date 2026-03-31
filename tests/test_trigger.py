@@ -1,13 +1,20 @@
 """Tests for the trigger expression parser and evaluator."""
 
+import datetime
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from dataclasses import dataclass
+
 from crazypumpkin.framework.trigger import (
+    ConditionalTrigger,
+    CronTrigger,
+    EventTrigger,
     TriggerParseError,
     _Comparison,
     _LogicalOp,
@@ -358,3 +365,128 @@ class TestParserRoundTrip:
     def test_parser_repr_or(self):
         ast = parse_trigger("a == 1 OR b == 2")
         assert repr(ast) == "Logic(Cmp(a == 1) OR Cmp(b == 2))"
+
+
+# ---------------------------------------------------------------------------
+# EventTrigger
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeEvent:
+    action: str = ""
+
+
+class TestEventTrigger:
+    def test_event_trigger_matches_topic(self):
+        trigger = EventTrigger(topic="task_created")
+        event = _FakeEvent(action="task_created")
+        assert trigger.matches(event) is True
+
+    def test_event_trigger_no_match(self):
+        trigger = EventTrigger(topic="task_created")
+        event = _FakeEvent(action="task_completed")
+        assert trigger.matches(event) is False
+
+    def test_event_trigger_wildcard_topic(self):
+        trigger = EventTrigger(topic="*")
+        assert trigger.matches(_FakeEvent(action="task_created")) is True
+        assert trigger.matches(_FakeEvent(action="anything")) is True
+
+    def test_event_trigger_glob_pattern(self):
+        trigger = EventTrigger(topic="task_*")
+        assert trigger.matches(_FakeEvent(action="task_created")) is True
+        assert trigger.matches(_FakeEvent(action="task_completed")) is True
+        assert trigger.matches(_FakeEvent(action="agent_started")) is False
+
+
+# ---------------------------------------------------------------------------
+# ConditionalTrigger
+# ---------------------------------------------------------------------------
+
+
+class TestConditionalTrigger:
+    def test_conditional_trigger_comparison(self):
+        trigger = ConditionalTrigger("cpu > 80")
+        assert trigger.evaluate({"cpu": 90}) is True
+        assert trigger.evaluate({"cpu": 70}) is False
+
+    def test_conditional_trigger_dotted_key(self):
+        trigger = ConditionalTrigger("metrics.cpu > 80")
+        assert trigger.evaluate({"metrics": {"cpu": 90}}) is True
+        assert trigger.evaluate({"metrics": {"cpu": 50}}) is False
+
+    def test_conditional_trigger_compound(self):
+        trigger = ConditionalTrigger("cpu > 80 AND memory > 70")
+        assert trigger.evaluate({"cpu": 90, "memory": 80}) is True
+        assert trigger.evaluate({"cpu": 90, "memory": 60}) is False
+
+    def test_conditional_trigger_compound_or(self):
+        trigger = ConditionalTrigger("cpu > 90 OR memory > 90")
+        assert trigger.evaluate({"cpu": 95, "memory": 50}) is True
+        assert trigger.evaluate({"cpu": 50, "memory": 95}) is True
+        assert trigger.evaluate({"cpu": 50, "memory": 50}) is False
+
+    def test_conditional_trigger_missing_key(self):
+        trigger = ConditionalTrigger("cpu > 80")
+        with pytest.raises(KeyError):
+            trigger.evaluate({})
+
+    def test_conditional_trigger_missing_nested_key(self):
+        trigger = ConditionalTrigger("metrics.cpu > 80")
+        with pytest.raises(KeyError):
+            trigger.evaluate({"metrics": {}})
+
+
+# ---------------------------------------------------------------------------
+# CronTrigger
+# ---------------------------------------------------------------------------
+
+
+class TestCronTrigger:
+    def test_cron_trigger_matches_current_time(self):
+        """Freeze time and verify should_fire returns True for matching expr."""
+        frozen = datetime.datetime(2026, 3, 31, 10, 30, 0)
+        with patch("crazypumpkin.framework.trigger._dt") as mock_dt:
+            mock_dt.datetime.now.return_value = frozen
+            trigger = CronTrigger("30 10 * * *")
+            assert trigger.should_fire() is True
+
+    def test_cron_trigger_no_match(self):
+        """should_fire returns False when time does not match."""
+        now = datetime.datetime(2026, 3, 31, 10, 30, 0)
+        trigger = CronTrigger("0 9 * * *")
+        assert trigger.should_fire(now=now) is False
+
+    def test_cron_trigger_step_expression(self):
+        """'*/15 * * * *' fires at :00, :15, :30, :45."""
+        trigger = CronTrigger("*/15 * * * *")
+        base = datetime.datetime(2026, 3, 31, 12, 0, 0)
+        for minute in (0, 15, 30, 45):
+            t = base.replace(minute=minute)
+            assert trigger.should_fire(now=t) is True, f"Expected True at :{minute:02d}"
+        for minute in (1, 14, 16, 29, 31, 44, 46, 59):
+            t = base.replace(minute=minute)
+            assert trigger.should_fire(now=t) is False, f"Expected False at :{minute:02d}"
+
+    def test_cron_trigger_day_of_week(self):
+        """'0 9 * * MON' only fires on Mondays at 09:00."""
+        trigger = CronTrigger("0 9 * * MON")
+        # 2026-03-30 is a Monday
+        monday_9am = datetime.datetime(2026, 3, 30, 9, 0, 0)
+        assert trigger.should_fire(now=monday_9am) is True
+        # Tuesday at 09:00 should not fire
+        tuesday_9am = datetime.datetime(2026, 3, 31, 9, 0, 0)
+        assert trigger.should_fire(now=tuesday_9am) is False
+        # Monday at 10:00 should not fire
+        monday_10am = datetime.datetime(2026, 3, 30, 10, 0, 0)
+        assert trigger.should_fire(now=monday_10am) is False
+
+    def test_cron_trigger_invalid_expression(self):
+        """Malformed cron expressions raise ValueError."""
+        with pytest.raises(ValueError):
+            CronTrigger("*/0 * * * *")
+        with pytest.raises(ValueError):
+            CronTrigger("abc")
+        with pytest.raises(ValueError):
+            CronTrigger("* * *")
