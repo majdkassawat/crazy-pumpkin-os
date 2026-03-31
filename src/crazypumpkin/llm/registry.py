@@ -1,15 +1,50 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from typing import Any
+
 from crazypumpkin.framework.models import AgentConfig, BudgetExceededError
 from crazypumpkin.framework.store import Store
 from crazypumpkin.llm.anthropic_api import AnthropicProvider
 from crazypumpkin.llm.base import LLMProvider
-from crazypumpkin.llm.openai_api import OpenAIProvider
+
+logger = logging.getLogger(__name__)
+
+
+class AllProvidersExhaustedError(Exception):
+    """Raised when all providers in a fallback chain have been exhausted."""
+
+
+@dataclass
+class RetryPolicy:
+    max_retries: int = 3
+    base_delay: float = 1.0
+    max_delay: float = 30.0
+    exponential_base: float = 2.0
+
+    def delay_for_attempt(self, attempt: int) -> float:
+        """Return delay in seconds for the given attempt number (0-indexed)."""
+        delay = self.base_delay * (self.exponential_base ** attempt)
+        return min(delay, self.max_delay)
+
+
+@dataclass
+class FallbackChain:
+    provider_names: list[str] = field(default_factory=list)
+    retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
 
 PROVIDER_CLASSES: dict[str, type[LLMProvider]] = {
     "anthropic_api": AnthropicProvider,
-    "openai_api": OpenAIProvider,
 }
+
+try:
+    from crazypumpkin.llm.openai_api import OpenAIProvider
+
+    PROVIDER_CLASSES["openai_api"] = OpenAIProvider
+except ImportError:
+    pass
 
 
 class ProviderRegistry:
@@ -162,3 +197,37 @@ class ProviderRegistry:
         if effective_model is not None:
             kwargs["model"] = effective_model
         return provider.call_json(prompt, **kwargs)
+
+    async def call_with_fallback(
+        self, chain: FallbackChain, messages: list[dict], **kwargs: Any
+    ) -> dict:
+        """Try each provider in *chain* with retries and exponential backoff.
+
+        Raises ``AllProvidersExhaustedError`` if every provider has been
+        exhausted after all retry attempts.
+        """
+        all_errors: list[tuple[str, Exception]] = []
+        for provider_name in chain.provider_names:
+            provider = self._providers.get(provider_name)
+            if provider is None:
+                logger.warning("Provider '%s' not found in registry, skipping.", provider_name)
+                continue
+            for attempt in range(chain.retry_policy.max_retries):
+                try:
+                    result = provider.call(messages[0].get("content", ""), **kwargs)
+                    return {"provider": provider_name, "result": result}
+                except Exception as exc:
+                    all_errors.append((provider_name, exc))
+                    delay = chain.retry_policy.delay_for_attempt(attempt)
+                    logger.warning(
+                        "Provider '%s' attempt %d failed: %s. Retrying in %.1fs.",
+                        provider_name, attempt + 1, exc, delay,
+                    )
+                    await asyncio.sleep(delay)
+            logger.error("Provider '%s' exhausted after %d retries.", provider_name, chain.retry_policy.max_retries)
+        error_summary = "; ".join(
+            f"{name}: {exc}" for name, exc in all_errors
+        )
+        raise AllProvidersExhaustedError(
+            f"All providers exhausted. Errors: {error_summary}"
+        )
