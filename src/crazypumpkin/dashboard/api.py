@@ -72,6 +72,19 @@ def get_dashboard_data(
                 "assigned_to": task.assigned_to,
             })
 
+    # ── Costs ──
+    from crazypumpkin.framework.models import AgentMetrics as _AM
+
+    per_agent_costs: list[dict] = []
+    total_usd = 0.0
+    for m in store._agent_metrics.values():
+        per_agent_costs.append({
+            "agent_id": m.agent_id,
+            "agent_name": m.agent_name,
+            "budget_spent_usd": m.budget_spent_usd,
+        })
+        total_usd += m.budget_spent_usd
+
     return {
         "agents": agents,
         "tasks": {
@@ -79,4 +92,8 @@ def get_dashboard_data(
             "recent_completions": recent_completions,
         },
         "errors": error_tasks,
+        "costs": {
+            "per_agent": per_agent_costs,
+            "total_usd": round(total_usd, 4),
+        },
     }

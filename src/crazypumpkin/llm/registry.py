@@ -141,6 +141,14 @@ class ProviderRegistry:
         self._check_budget(agent, agent_config)
         provider, agent_model = self.get_provider(agent)
         effective_model = model if model is not None else agent_model
+
+        # Use call_with_cost if available to track spend
+        if hasattr(provider, "call_with_cost") and not tools:
+            text, cost = provider.call_with_cost(prompt, model=effective_model, timeout=timeout, system=system)
+            if agent and self._store is not None:
+                self._store.record_llm_spend(agent, cost.cost_usd)
+            return text
+
         return provider.call(prompt, model=effective_model, timeout=timeout, cwd=cwd, tools=tools, system=system)
 
     def call_multi_turn(

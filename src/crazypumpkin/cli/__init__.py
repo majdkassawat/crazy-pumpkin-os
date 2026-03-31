@@ -14,12 +14,15 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import logging
 import os
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+import click
 
 from crazypumpkin.cli.errors import friendly_errors
 
@@ -361,12 +364,25 @@ def cmd_goal(args):
 def cmd_status(args):
     """Show current company status."""
     from crazypumpkin.framework.config import load_config
+    from crazypumpkin.observability.metrics import get_cache_stats
 
     config = load_config()
     cycle_interval = config.pipeline.get("cycle_interval", 30)
     print(f"Company: {config.company.get('name', 'Unknown')}")
     print(f"cycle_interval: {cycle_interval}s")
     print("Tasks — pending: 0  running: 0  complete: 0")
+
+    # Prompt Cache section
+    cache = get_cache_stats()
+    total = cache["hits"] + cache["misses"]
+    if total == 0:
+        print("Prompt Cache: no data")
+    else:
+        print("Prompt Cache:")
+        print(f"  hits: {cache['hits']}")
+        print(f"  misses: {cache['misses']}")
+        print(f"  hit_rate: {cache['hit_rate_pct']}%")
+        print(f"  tokens_saved: {cache['tokens_saved']}")
 
 
 @friendly_errors
@@ -426,6 +442,170 @@ def cmd_list_plugins(args):
 
 
 @friendly_errors
+def cmd_run_agent(args):
+    """Run a single agent by name.
+
+    Loads configuration, resolves the agent from the registry, executes it,
+    streams output to stdout, and prints a summary on completion.
+    Exit codes: 0 success, 1 agent failure, 2 agent not found.
+    """
+    import concurrent.futures
+
+    from crazypumpkin.framework.config import Config, load_config
+    from crazypumpkin.framework.registry import AgentRegistry
+
+    logger = logging.getLogger('crazypumpkin.cli')
+
+    agent_name = args.agent_name
+    config_path = getattr(args, "config_path", None)
+    param_raw = getattr(args, "param", ())
+    timeout = getattr(args, "timeout", 300)
+
+    # Parse key=value params
+    params: dict[str, str] = {}
+    for p in param_raw:
+        if "=" not in p:
+            print(f"Error: Invalid parameter format '{p}', expected key=value", file=sys.stderr)
+            sys.exit(1)
+        k, v = p.split("=", 1)
+        params[k] = v
+
+    logger.debug('Params: %s', params)
+
+    # Load config
+    try:
+        if config_path:
+            config = load_config(Path(config_path).parent)
+        else:
+            config = load_config()
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # Resolve agent by name
+    logger.info('Resolving agent: %s', agent_name)
+    registry = AgentRegistry()
+
+    # Try to instantiate agents from config definitions
+    from crazypumpkin.framework.agent import BaseAgent
+    from crazypumpkin.framework.models import Agent, AgentRole, TaskOutput, Task, deterministic_id
+
+    agent_def = None
+    for a in config.agents:
+        if a.name == agent_name:
+            agent_def = a
+            break
+
+    if agent_def is None:
+        print(f"Error: Agent '{agent_name}' not found", file=sys.stderr)
+        sys.exit(2)
+
+    logger.info('Agent resolved: %s (class=%s)', agent_name, agent_def.class_path)
+
+    # Try to load the agent class
+    agent_instance = None
+    if agent_def.class_path:
+        try:
+            module_path, class_name = agent_def.class_path.rsplit(".", 1)
+            import importlib
+            module = importlib.import_module(module_path)
+            agent_cls = getattr(module, class_name)
+            agent_model = Agent(
+                id=deterministic_id(agent_name),
+                name=agent_name,
+                role=agent_def.role,
+            )
+            agent_instance = agent_cls(agent_model)
+        except Exception as exc:
+            print(f"Error: Failed to load agent class '{agent_def.class_path}': {exc}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print(f"Error: Agent '{agent_name}' has no class_path defined", file=sys.stderr)
+        sys.exit(1)
+
+    # Build task and context
+    task = Task(title=f"CLI run: {agent_name}", description=f"Manual run via CLI")
+    context = {"params": params, "source": "cli"}
+
+    # Execute with timeout
+    print(f"Running agent '{agent_name}' (timeout={timeout}s) ...")
+    start = time.time()
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(agent_instance.run, task, context)
+            result = future.result(timeout=timeout)
+        duration = time.time() - start
+        logger.info('Agent finished in %.2fs', duration)
+        print(result.content)
+        snippet = result.content[:200] if result.content else "(empty)"
+        print(f"\n--- Summary ---")
+        print(f"Status: success")
+        print(f"Duration: {duration:.2f}s")
+        print(f"Result: {snippet}")
+        sys.exit(0)
+    except concurrent.futures.TimeoutError:
+        duration = time.time() - start
+        logger.info('Agent finished in %.2fs', duration)
+        print(f"\nError: Agent '{agent_name}' timed out after {timeout}s", file=sys.stderr)
+        print(f"\n--- Summary ---")
+        print(f"Status: timeout")
+        print(f"Duration: {duration:.2f}s")
+        sys.exit(1)
+    except Exception as exc:
+        duration = time.time() - start
+        logger.info('Agent finished in %.2fs', duration)
+        print(f"\nError: Agent execution failed: {exc}", file=sys.stderr)
+        print(f"\n--- Summary ---")
+        print(f"Status: failed")
+        print(f"Duration: {duration:.2f}s")
+        sys.exit(1)
+
+
+@friendly_errors
+def cmd_sessions(args):
+    """List all sessions, optionally filtered by agent."""
+    from crazypumpkin.framework.models import Session
+    from crazypumpkin.framework.store import Store
+
+    store = Store()
+    agent_filter = getattr(args, "agent", None)
+    sessions = store.list_sessions(agent_name=agent_filter)
+
+    header = f"{'session_id':<34} {'agent':<20} {'messages':<10} {'updated'}"
+    print(header)
+    print("-" * len(header))
+    for s in sessions:
+        print(f"{s.session_id:<34} {s.agent_name:<20} {len(s.messages):<10} {s.updated_at}")
+
+
+@friendly_errors
+def cmd_session_start(args):
+    """Start a new interactive multi-turn session with an agent."""
+    from crazypumpkin.framework.models import Session
+    from crazypumpkin.framework.store import Store
+
+    agent_name = args.agent_name
+    store = Store()
+    session = store.create_session(agent_name)
+    print(f"Session {session.session_id} started with {agent_name}")
+
+    while True:
+        try:
+            user_input = input(f"{agent_name}> ")
+        except (EOFError, KeyboardInterrupt):
+            print("\nSession ended.")
+            break
+        if user_input.strip().lower() in ("exit", "quit"):
+            print("Session ended.")
+            break
+        store.append_message(session.session_id, "user", user_input)
+        # Placeholder: in a real implementation, run_turn would call the agent
+        response = f"[{agent_name}] Echo: {user_input}"
+        store.append_message(session.session_id, "assistant", response)
+        print(response)
+
+
+@friendly_errors
 def cmd_remove_plugin(args):
     """Uninstall a plugin package or remove a local plugin directory."""
     package = args.package
@@ -459,6 +639,260 @@ def cmd_remove_plugin(args):
         print(result.stdout.rstrip())
 
     print(f"Plugin '{package}' removed.")
+
+
+@friendly_errors
+def cmd_plugins_list(args):
+    """Discover and display all plugins with source and status info."""
+    from crazypumpkin.framework.plugin_loader import (
+        PluginLoader,
+        discover_entrypoint_plugins,
+    )
+
+    loader = PluginLoader()
+    ep_plugins = discover_entrypoint_plugins()
+    ep_names = {p.name for p in ep_plugins}
+
+    plugins = loader.plugins
+
+    header = f"{'Name':<30} {'Version':<12} {'Source':<15} {'Status'}"
+    print(header)
+    print("-" * len(header))
+
+    for p in plugins:
+        version = p.version or "unknown"
+        source = "entrypoint" if p.name in ep_names else "config"
+        status = "loaded" if p.entry_point else "error"
+        print(f"{p.name:<30} {version:<12} {source:<15} {status}")
+
+
+@friendly_errors
+def cmd_schedule_list(args):
+    """List all cron-scheduled agents with their next run times."""
+    from datetime import datetime, timezone
+
+    from crazypumpkin.framework.config import load_config
+    from crazypumpkin.scheduler.cron import parse_cron_expression
+
+    config = load_config()
+
+    scheduled = [a for a in config.agents if a.schedule]
+    if not scheduled:
+        print("No scheduled agents found.", file=sys.stderr)
+        return
+
+    header = f"{'Agent Name':<25} {'Cron Expression':<20} {'Next Run':<25} {'Status'}"
+    print(header)
+    print("-" * len(header))
+
+    now = datetime.now(timezone.utc)
+    for agent in scheduled:
+        cron_expr = agent.schedule
+        try:
+            parsed = parse_cron_expression(cron_expr)
+            # Compute a simple next-run approximation
+            next_run = _compute_next_run(parsed, now)
+            status = "active"
+        except ValueError:
+            next_run = "invalid"
+            status = "error"
+        print(f"{agent.name:<25} {cron_expr:<20} {next_run:<25} {status}")
+
+
+@friendly_errors
+def cmd_schedule_add(args):
+    """Add or update a cron schedule for an agent."""
+    from crazypumpkin.framework.config import load_config, save_config
+    from crazypumpkin.scheduler.cron import parse_cron_expression
+
+    agent_name = args.agent_name
+    cron_expr = args.cron_expr
+
+    # Validate cron expression
+    try:
+        parse_cron_expression(cron_expr)
+    except ValueError as e:
+        print(f"Invalid cron expression: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    config = load_config()
+
+    # Find the agent
+    agent = None
+    for a in config.agents:
+        if a.name == agent_name:
+            agent = a
+            break
+
+    if agent is None:
+        print(f"Agent '{agent_name}' does not exist in config", file=sys.stderr)
+        sys.exit(1)
+
+    agent.schedule = cron_expr
+    save_config(config)
+    print(f"Scheduled {agent_name} with cron: {cron_expr}")
+
+
+@friendly_errors
+def cmd_schedule_remove(args):
+    """Remove the schedule from an agent."""
+    from crazypumpkin.framework.config import load_config, save_config
+
+    agent_name = args.agent_name
+    config = load_config()
+
+    # Find the agent and check for a schedule
+    agent = None
+    for a in config.agents:
+        if a.name == agent_name:
+            agent = a
+            break
+
+    if agent is None or not agent.schedule:
+        print(f"No schedule found for {agent_name}")
+        sys.exit(1)
+
+    agent.schedule = ""
+    save_config(config)
+    print(f"Removed schedule for {agent_name}")
+
+
+def _compute_next_run(parsed, now):
+    """Compute the next run time from a parsed cron expression."""
+    from datetime import datetime, timedelta, timezone
+
+    # Simple forward scan: check each minute in the next 48 hours
+    candidate = now.replace(second=0, microsecond=0)
+    for _ in range(48 * 60):
+        candidate += timedelta(minutes=1)
+        if (candidate.minute in parsed.minute.values
+                and candidate.hour in parsed.hour.values
+                and candidate.day in parsed.dom.values
+                and candidate.month in parsed.month.values
+                and candidate.weekday() in [d % 7 for d in parsed.dow.values]):
+            return candidate.strftime("%Y-%m-%d %H:%M UTC")
+    return "unknown"
+
+
+# ── Click-based CLI ──────────────────────────────────────────────────
+
+
+@click.group()
+def cli():
+    """Crazy Pumpkin OS — CLI."""
+
+
+@cli.command("run")
+@click.argument("agent_name")
+@click.option("--config", "config_path", default=None, type=click.Path())
+@click.option("--param", multiple=True)
+@click.option("--timeout", default=300, type=int)
+def cli_run(agent_name, config_path, param, timeout):
+    """Run a single agent by name."""
+    import concurrent.futures
+
+    from crazypumpkin.framework.config import load_config
+    from crazypumpkin.framework.registry import AgentRegistry
+
+    logger = logging.getLogger('crazypumpkin.cli')
+
+    # Parse key=value params
+    params: dict[str, str] = {}
+    for p in param:
+        if "=" not in p:
+            click.echo(f"Error: Invalid parameter format '{p}'", err=True)
+            sys.exit(1)
+        k, v = p.split("=", 1)
+        params[k] = v
+
+    logger.debug('Params: %s', params)
+
+    # Load config from custom path
+    if config_path:
+        load_config(Path(config_path).parent)
+
+    # Resolve agent by name
+    logger.info('Resolving agent: %s', agent_name)
+    registry = AgentRegistry()
+    try:
+        agent = registry.get(agent_name)
+        if agent is None:
+            raise KeyError(agent_name)
+    except KeyError:
+        click.echo(f"Error: Agent '{agent_name}' not found", err=True)
+        sys.exit(2)
+
+    logger.info('Agent resolved: %s (class=%s)', agent_name, type(agent).__module__ + '.' + type(agent).__qualname__)
+
+    # Execute with timeout
+    click.echo(f"Running agent '{agent_name}' ...")
+    start = time.time()
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(agent.run, params)
+            result = future.result(timeout=timeout)
+        duration = time.time() - start
+        logger.info('Agent finished in %.2fs', duration)
+        click.echo(str(result))
+    except concurrent.futures.TimeoutError:
+        duration = time.time() - start
+        logger.info('Agent finished in %.2fs', duration)
+        click.echo(f"Error: Timeout — agent '{agent_name}' exceeded {timeout}s", err=True)
+        sys.exit(1)
+    except Exception as exc:
+        duration = time.time() - start
+        logger.info('Agent finished in %.2fs', duration)
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+
+@friendly_errors
+def cmd_cost(args):
+    """Display LLM cost tracking summary."""
+    from crazypumpkin.observability.metrics import get_llm_cost_snapshot
+
+    snap = get_llm_cost_snapshot()
+
+    print(f"Total cost: ${snap['total_cost_usd']:.4f}")
+    print(f"Total calls: {snap['call_count']}")
+    print(f"Prompt tokens: {snap['total_prompt_tokens']}")
+    print(f"Completion tokens: {snap['total_completion_tokens']}")
+    print(f"Cache read tokens: {snap['total_cache_read_tokens']}")
+    print(f"Cache creation tokens: {snap['total_cache_creation_tokens']}")
+
+    by_model = snap.get("by_model", {})
+    if by_model:
+        print("\nPer-model breakdown:")
+        for model_name, info in by_model.items():
+            cost = info.get("cost_usd", info.get("total_cost_usd", 0.0))
+            calls = info.get("call_count", 0)
+            prompt = info.get("prompt_tokens", info.get("total_prompt_tokens", 0))
+            completion = info.get("completion_tokens", info.get("total_completion_tokens", 0))
+            print(f"  {model_name}: ${cost:.4f} | {calls} calls | {prompt}+{completion} tokens")
+
+
+@friendly_errors
+def cmd_config_template(args):
+    """Output a default configuration template in YAML or JSON format."""
+    import json as _json
+    import yaml as _yaml
+    from crazypumpkin.config import get_default_config
+
+    config = get_default_config()
+    fmt = getattr(args, "format", "yaml") or "yaml"
+    output_path = getattr(args, "output", None)
+
+    if fmt == "json":
+        text = _json.dumps(config, indent=2)
+    else:
+        text = _yaml.dump(config, default_flow_style=False)
+
+    if output_path:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"Config template written to {output_path}")
+    else:
+        print(text)
 
 
 def main():
@@ -534,6 +968,59 @@ def main():
         "package", help="Package name to remove",
     )
 
+    plugins_parser = sub.add_parser("plugins", help="Plugin management")
+    plugins_sub = plugins_parser.add_subparsers(dest="plugins_command")
+    plugins_sub.add_parser("list", help="List all plugins with source and status")
+
+    schedule_parser = sub.add_parser("schedule", help="Schedule management")
+    schedule_sub = schedule_parser.add_subparsers(dest="schedule_command")
+    schedule_sub.add_parser("list", help="List all scheduled agents")
+    schedule_add_parser = schedule_sub.add_parser("add", help="Add or update a cron schedule for an agent")
+    schedule_add_parser.add_argument("agent_name", help="Name of the agent")
+    schedule_add_parser.add_argument("cron_expr", help="Cron expression string")
+    schedule_remove_parser = schedule_sub.add_parser("remove", help="Remove schedule from an agent")
+    schedule_remove_parser.add_argument("agent_name", help="Name of the agent")
+
+    run_agent_parser = sub.add_parser("run-agent", help="Run a single agent by name")
+    run_agent_parser.add_argument("agent_name", help="Name of the agent to run")
+    run_agent_parser.add_argument(
+        "--config", dest="config_path", default=None,
+        help="Config file override",
+    )
+    run_agent_parser.add_argument(
+        "--param", action="append", default=[],
+        help="Runtime parameter as key=value (can be repeated)",
+    )
+    run_agent_parser.add_argument(
+        "--timeout", type=int, default=300,
+        help="Execution timeout in seconds (default: 300)",
+    )
+
+    sub.add_parser("cost", help="Show LLM cost tracking summary")
+
+    config_template_parser = sub.add_parser("config-template", help="Output a default config template")
+    config_template_parser.add_argument(
+        "--format", choices=["yaml", "json"], default="yaml",
+        help="Output format (default: yaml)",
+    )
+    config_template_parser.add_argument(
+        "--output", "-o", default=None,
+        help="Write template to a file instead of stdout",
+    )
+
+    sessions_parser = sub.add_parser("sessions", help="List all sessions")
+    sessions_parser.add_argument(
+        "--agent", type=str, default=None,
+        help="Filter by agent name",
+    )
+
+    session_start_parser = sub.add_parser(
+        "session-start", help="Start a new interactive session with an agent",
+    )
+    session_start_parser.add_argument(
+        "agent_name", help="Name of the agent to start a session with",
+    )
+
     args = parser.parse_args()
 
     from crazypumpkin.cli.doctor import cmd_doctor
@@ -552,9 +1039,28 @@ def main():
         "install-plugin": cmd_install_plugin,
         "list-plugins": cmd_list_plugins,
         "remove-plugin": cmd_remove_plugin,
+        "run-agent": cmd_run_agent,
+        "sessions": cmd_sessions,
+        "session-start": cmd_session_start,
+        "cost": cmd_cost,
+        "config-template": cmd_config_template,
     }
 
-    if args.command in commands:
+    if args.command == "schedule":
+        if getattr(args, "schedule_command", None) == "list":
+            cmd_schedule_list(args)
+        elif getattr(args, "schedule_command", None) == "add":
+            cmd_schedule_add(args)
+        elif getattr(args, "schedule_command", None) == "remove":
+            cmd_schedule_remove(args)
+        else:
+            schedule_parser.print_help()
+    elif args.command == "plugins":
+        if getattr(args, "plugins_command", None) == "list":
+            cmd_plugins_list(args)
+        else:
+            plugins_parser.print_help()
+    elif args.command in commands:
         commands[args.command](args)
     else:
         parser.print_help()
