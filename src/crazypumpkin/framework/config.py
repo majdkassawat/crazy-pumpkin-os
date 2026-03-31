@@ -186,6 +186,34 @@ def _validate_and_build(raw: dict, project_root: Path) -> Config:
             class_path=a.get("class", ""),
         ))
 
+    # notifications — validate slack sub-section if present
+    notifications = raw.get("notifications") or {}
+    slack_cfg = notifications.get("slack")
+    if slack_cfg is not None:
+        if not isinstance(slack_cfg, dict):
+            raise ValueError(
+                "Invalid notifications.slack: expected a mapping\n"
+                "\n"
+                "The 'slack' section must be a mapping with at least 'webhook_url'.\n"
+                "Example:\n"
+                "  notifications:\n"
+                "    slack:\n"
+                "      webhook_url: ${SLACK_WEBHOOK_URL}\n"
+                "      channel: \"#general\"\n"
+                "      bot_name: CrazyPumpkin"
+            )
+        webhook_url = slack_cfg.get("webhook_url")
+        if not webhook_url or not str(webhook_url).strip():
+            raise ValueError(
+                "Missing required field: notifications.slack.webhook_url\n"
+                "\n"
+                "The 'slack' section requires a 'webhook_url' field.\n"
+                "Example:\n"
+                "  notifications:\n"
+                "    slack:\n"
+                "      webhook_url: ${SLACK_WEBHOOK_URL}"
+            )
+
     # pipeline defaults
     pipeline = raw.get("pipeline") or {}
     pipeline.setdefault("cycle_interval", 30)

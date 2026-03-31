@@ -67,10 +67,14 @@ notifications:
   # - type: telegram
   #   token: ${TELEGRAM_BOT_TOKEN}
   #   chat_id: ${TELEGRAM_CHAT_ID}
-  # - type: slack
-  #   webhook_url: ${SLACK_WEBHOOK_URL}
   # - type: webhook
   #   url: https://my-server.com/hooks/crazypumpkin
+
+  # Slack integration — uncomment and set SLACK_WEBHOOK_URL to enable
+  # slack:
+  #   webhook_url: ${SLACK_WEBHOOK_URL}
+  #   channel: "#general"
+  #   bot_name: CrazyPumpkin
 
 dashboard:
   port: 8500

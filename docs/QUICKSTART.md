@@ -156,6 +156,161 @@ if __name__ == "__main__":
 | `@register_agent` | `crazypumpkin.framework.registry` | Decorator to auto-register an agent class |
 | `default_registry` | `crazypumpkin.framework.registry` | The global agent registry instance |
 
+## 6. Set Up Slack Notifications
+
+Crazy Pumpkin OS can send lifecycle alerts (task start/complete/fail, agent
+start/complete/fail) and health reports to a Slack channel via an incoming
+webhook.
+
+### 6.1 Create a Slack Incoming Webhook
+
+1. Go to [https://api.slack.com/apps](https://api.slack.com/apps) and create a new app (or use an existing one).
+2. Navigate to **Incoming Webhooks** and toggle the feature **On**.
+3. Click **Add New Webhook to Workspace**, choose a channel, and authorize.
+4. Copy the webhook URL — it looks like `https://hooks.slack.com/services/T.../B.../xxxx`.
+5. Store it in an environment variable:
+
+```bash
+export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/T.../B.../xxxx"
+```
+
+### 6.2 Configure Slack in `config.yaml`
+
+Add a `slack` block inside the `notifications` section of your `config.yaml`:
+
+```yaml
+notifications:
+  slack:
+    webhook_url: ${SLACK_WEBHOOK_URL}
+    channel: "#cp-alerts"          # optional — override the webhook default
+    username: "CrazyPumpkin"       # optional — bot display name
+    icon_emoji: ":jack_o_lantern:" # optional — bot avatar emoji
+```
+
+| Key | Required | Description |
+| --- | --- | --- |
+| `webhook_url` | **yes** | Slack incoming webhook URL (use `${ENV_VAR}` syntax) |
+| `channel` | no | Channel override (e.g. `#alerts`). Defaults to the webhook's channel. |
+| `username` | no | Bot username displayed in Slack |
+| `icon_emoji` | no | Emoji used as the bot's avatar |
+
+### 6.3 Channel Routing with the NotificationRouter
+
+The framework provides a `NotificationRouter` that dispatches events to one or
+more channels. To set up Slack programmatically:
+
+```python
+from crazypumpkin.notifications import configure_slack, get_router
+
+# Option A — automatic setup from config dict
+channel = configure_slack({
+    "slack": {
+        "webhook_url": "https://hooks.slack.com/services/T.../B.../xxxx",
+        "channel": "#cp-alerts",
+    }
+})
+
+# The channel is now registered on the global router.
+router = get_router()
+print(router.channels)  # [<SlackWebhookChannel ...>]
+
+# Option B — manual setup
+from crazypumpkin.notifications.slack import SlackWebhookChannel
+
+alerts = SlackWebhookChannel(
+    webhook_url="https://hooks.slack.com/services/T.../B.../xxxx",
+    channel="#cp-alerts",
+)
+router.add_channel(alerts)
+```
+
+You can register multiple channels (Slack, email, etc.) on the same router.
+Events are broadcast to all of them.
+
+### 6.4 Sending Notifications
+
+```python
+from crazypumpkin.notifications import notify
+
+# Lifecycle event — automatically routed to all registered channels
+notify({
+    "action": "task_complete",
+    "entity_id": "task-42",
+    "detail": "All tests passed",
+})
+```
+
+The `SlackWebhookChannel` also supports direct messaging and alert levels:
+
+```python
+from crazypumpkin.notifications.slack import SlackWebhookChannel
+
+slack = SlackWebhookChannel(
+    webhook_url="https://hooks.slack.com/services/T.../B.../xxxx",
+)
+
+# Plain message
+slack.send_message("Deployment finished successfully.")
+
+# Alert with severity level (info | warning | error | critical)
+slack.send_alert("Disk usage above 90%", level="warning")
+```
+
+### 6.5 Batch Messages
+
+To combine multiple messages into a single Slack post (useful during pipeline
+cycles):
+
+```python
+slack.start_batch()
+slack.send_message("Step 1 complete")
+slack.send_message("Step 2 complete")
+slack.send_alert("Step 3 failed", level="error")
+count = slack.flush_batch()  # sends one combined message, returns 3
+```
+
+Call `slack.discard_batch()` instead of `flush_batch()` to drop queued
+messages without sending.
+
+### 6.6 Test the Integration
+
+**Quick smoke test** — verify your webhook URL works:
+
+```bash
+python -c "
+from crazypumpkin.notifications.slack import SlackWebhookChannel
+ch = SlackWebhookChannel(webhook_url='https://hooks.slack.com/services/YOUR/WEBHOOK/URL')
+ch.send_message(':wave: Hello from Crazy Pumpkin OS!')
+"
+```
+
+If the message appears in your Slack channel, the integration is working.
+
+**End-to-end test** — wire up the router and emit an event:
+
+```python
+from crazypumpkin.notifications import configure_slack, notify
+
+configure_slack({
+    "slack": {
+        "webhook_url": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+        "channel": "#cp-alerts",
+    }
+})
+
+notify({
+    "action": "task_complete",
+    "entity_id": "test-task-1",
+    "detail": "Integration test passed",
+})
+```
+
+**Unit tests** — run the existing test suite to confirm nothing is broken:
+
+```bash
+python -m pytest tests/test_notifications.py tests/test_slack.py -v
+```
+
 ## Next Steps
 
 - See [PLUGIN_GUIDE.md](../PLUGIN_GUIDE.md) for packaging agents as plugins
