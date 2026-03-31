@@ -182,6 +182,34 @@ class ProviderRegistry:
             cwd=cwd,
         )
 
+    def call_session(
+        self,
+        messages: list[dict],
+        *,
+        agent: str | None = None,
+        agent_config: AgentConfig | None = None,
+        model: str | None = None,
+        timeout: float | None = None,
+        system: str | None = None,
+    ) -> tuple[str, list[dict]]:
+        """Dispatch a session-aware call to the provider assigned to *agent*.
+
+        Returns ``(response_text, updated_messages)`` where *updated_messages*
+        contains the full conversation history including the latest reply.
+
+        Raises ``BudgetExceededError`` if the agent has exceeded its
+        monthly budget cap.
+        """
+        self._check_budget(agent, agent_config)
+        provider, agent_model = self.get_provider(agent)
+        effective_model = model if model is not None else agent_model
+        return provider.call_session(
+            messages,
+            model=effective_model,
+            timeout=timeout,
+            system=system,
+        )
+
     def call_json(
         self,
         prompt: str,

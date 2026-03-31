@@ -123,3 +123,31 @@ class LLMProvider(ABC):
         cache: bool = True,
     ) -> str:
         """Run an agentic conversation loop until the model stops issuing tool calls or *max_turns* is reached."""
+
+    @abstractmethod
+    def call_session(
+        self,
+        messages: list[dict],
+        *,
+        model: str | None = None,
+        timeout: float | None = None,
+        system: str | None = None,
+        cache: bool = True,
+    ) -> tuple[str, list[dict]]:
+        """Send messages with conversation context and return ``(response_text, updated_messages)``.
+
+        Unlike :meth:`call` which accepts a single prompt string, this method
+        takes a full conversation history as a list of message dicts, allowing
+        the caller to maintain session state across multiple turns.
+
+        Args:
+            messages: Conversation history as a list of ``{"role": ..., "content": ...}`` dicts.
+            model: Model override.
+            timeout: Optional request timeout in seconds.
+            system: Optional system prompt.
+            cache: Whether to use prompt caching (provider-dependent).
+
+        Returns:
+            A tuple of ``(assistant_reply_text, updated_messages)`` where
+            *updated_messages* is the input list with the assistant reply appended.
+        """

@@ -56,6 +56,20 @@ class MockLLMProvider(LLMProvider):
         self.last_prompt = prompt
         return f"mock-multi-turn:{prompt}"
 
+    def call_session(
+        self,
+        messages: list[dict],
+        *,
+        model: str | None = None,
+        timeout: float | None = None,
+        system: str | None = None,
+        cache: bool = True,
+    ) -> tuple[str, list[dict]]:
+        self.last_prompt = messages[-1]["content"] if messages else None
+        text = f"mock-session:{self.last_prompt}"
+        updated = list(messages) + [{"role": "assistant", "content": text}]
+        return text, updated
+
 
 # ---------------------------------------------------------------------------
 # MockLLMProvider tests
@@ -116,6 +130,36 @@ class TestMockLLMProvider:
         for turns in (1, 5, 100):
             result = provider.call_multi_turn("go", max_turns=turns)
             assert result == "mock-multi-turn:go"
+
+    def test_call_session_returns_tuple(self):
+        provider = MockLLMProvider()
+        messages = [{"role": "user", "content": "hello"}]
+        text, updated = provider.call_session(messages)
+        assert isinstance(text, str)
+        assert text == "mock-session:hello"
+        assert isinstance(updated, list)
+        assert len(updated) == 2
+        assert updated[-1] == {"role": "assistant", "content": text}
+
+    def test_call_session_preserves_history(self):
+        provider = MockLLMProvider()
+        messages = [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "reply1"},
+            {"role": "user", "content": "second"},
+        ]
+        text, updated = provider.call_session(messages)
+        assert len(updated) == 4
+        assert updated[:3] == messages
+        assert updated[3]["role"] == "assistant"
+
+    def test_call_session_does_not_mutate_input(self):
+        provider = MockLLMProvider()
+        messages = [{"role": "user", "content": "hi"}]
+        original_len = len(messages)
+        _, updated = provider.call_session(messages)
+        assert len(messages) == original_len
+        assert len(updated) == original_len + 1
 
 
 # ---------------------------------------------------------------------------
@@ -741,6 +785,82 @@ class TestAnthropicProvider:
                 f"Expected exactly {max_t} API calls, got {mock_create.call_count}"
             )
 
+    # -- call_session() --------------------------------------------------------
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_call_session_returns_text_and_updated_messages(self, mock_cls):
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response("session reply")
+
+        messages = [{"role": "user", "content": "hello"}]
+        text, updated = provider.call_session(messages)
+
+        assert text == "session reply"
+        assert len(updated) == 2
+        assert updated[0] == messages[0]
+        assert updated[1] == {"role": "assistant", "content": "session reply"}
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_call_session_forwards_messages_to_api(self, mock_cls):
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response("ok")
+
+        messages = [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "reply"},
+            {"role": "user", "content": "second"},
+        ]
+        provider.call_session(messages)
+
+        call_kwargs = mock_create.call_args.kwargs
+        assert call_kwargs["messages"] == messages
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_call_session_forwards_timeout(self, mock_cls):
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response("ok")
+
+        provider.call_session([{"role": "user", "content": "hi"}], timeout=30.0)
+
+        call_kwargs = mock_create.call_args.kwargs
+        assert call_kwargs["timeout"] == 30.0
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_call_session_forwards_system(self, mock_cls):
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response("ok")
+
+        provider.call_session([{"role": "user", "content": "hi"}], system="be helpful")
+
+        call_kwargs = mock_create.call_args.kwargs
+        assert "system" in call_kwargs
+
+    @mock.patch("crazypumpkin.llm.anthropic_api.Anthropic")
+    def test_call_session_does_not_mutate_input(self, mock_cls):
+        from crazypumpkin.llm.anthropic_api import AnthropicProvider
+
+        provider = AnthropicProvider()
+        mock_create = provider._client.messages.create
+        mock_create.return_value = _make_anthropic_response("ok")
+
+        messages = [{"role": "user", "content": "hi"}]
+        _, updated = provider.call_session(messages)
+
+        assert len(messages) == 1
+        assert len(updated) == 2
+
 
 # ---------------------------------------------------------------------------
 # OpenAIProvider tests (patched client — no real API calls)
@@ -860,3 +980,53 @@ class TestOpenAIProvider:
         assert result == {"key": "value"}
         call_kwargs = mock_create.call_args.kwargs if mock_create.call_args.kwargs else mock_create.call_args[1]
         assert call_kwargs["response_format"] == {"type": "json_object"}
+
+    # -- call_session() --------------------------------------------------------
+
+    @mock.patch("crazypumpkin.llm.openai_api.OpenAI")
+    def test_call_session_returns_text_and_updated_messages(self, mock_cls):
+        from crazypumpkin.llm.openai_api import OpenAIProvider
+
+        provider = OpenAIProvider()
+        mock_create = provider._client.chat.completions.create
+        mock_create.return_value = _make_openai_response("session reply")
+
+        messages = [{"role": "user", "content": "hello"}]
+        text, updated = provider.call_session(messages)
+
+        assert text == "session reply"
+        assert len(updated) == 2
+        assert updated[0] == messages[0]
+        assert updated[1] == {"role": "assistant", "content": "session reply"}
+
+    @mock.patch("crazypumpkin.llm.openai_api.OpenAI")
+    def test_call_session_forwards_system_as_system_message(self, mock_cls):
+        from crazypumpkin.llm.openai_api import OpenAIProvider
+
+        provider = OpenAIProvider()
+        mock_create = provider._client.chat.completions.create
+        mock_create.return_value = _make_openai_response("ok")
+
+        provider.call_session(
+            [{"role": "user", "content": "hi"}],
+            system="be helpful",
+        )
+
+        call_kwargs = mock_create.call_args.kwargs if mock_create.call_args.kwargs else mock_create.call_args[1]
+        api_messages = call_kwargs["messages"]
+        assert api_messages[0] == {"role": "system", "content": "be helpful"}
+        assert api_messages[1] == {"role": "user", "content": "hi"}
+
+    @mock.patch("crazypumpkin.llm.openai_api.OpenAI")
+    def test_call_session_does_not_mutate_input(self, mock_cls):
+        from crazypumpkin.llm.openai_api import OpenAIProvider
+
+        provider = OpenAIProvider()
+        mock_create = provider._client.chat.completions.create
+        mock_create.return_value = _make_openai_response("ok")
+
+        messages = [{"role": "user", "content": "hi"}]
+        _, updated = provider.call_session(messages)
+
+        assert len(messages) == 1
+        assert len(updated) == 2

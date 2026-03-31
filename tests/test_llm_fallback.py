@@ -106,6 +106,10 @@ class MockLLMProvider(LLMProvider):
     def call_multi_turn(self, prompt, *, max_turns=10, tools=None, timeout=None, cwd=None):
         return f"multi:{prompt}"
 
+    def call_session(self, messages, *, model=None, timeout=None, system=None, cache=True):
+        text = f"session:{messages[-1]['content']}" if messages else "session:"
+        return text, list(messages) + [{"role": "assistant", "content": text}]
+
 
 def _make_registry_with_mocks(provider_names, failing=None):
     """Build a ProviderRegistry with mock providers.

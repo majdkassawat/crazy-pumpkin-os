@@ -269,3 +269,30 @@ class AnthropicProvider(LLMProvider):
             messages.append({"role": "user", "content": tool_results})
 
         return "\n".join(collected_text)
+
+    def call_session(
+        self,
+        messages: list[dict],
+        *,
+        model: str | None = None,
+        timeout: float | None = None,
+        system: str | None = None,
+        cache: bool = True,
+    ) -> tuple[str, list[dict]]:
+        """Send messages with conversation context and return ``(response_text, updated_messages)``."""
+        resolved = self._resolve_model(model)
+        kwargs: dict = {
+            "model": resolved,
+            "max_tokens": 4096,
+            "messages": messages,
+        }
+        if system is not None:
+            kwargs["system"] = self._build_system_blocks(system, cache)
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        response = self._client.messages.create(**kwargs)
+        self._record_cache_from_usage(response)
+        parts = [block.text for block in response.content if block.type == "text"]
+        text = "\n".join(parts)
+        updated = list(messages) + [{"role": "assistant", "content": text}]
+        return text, updated

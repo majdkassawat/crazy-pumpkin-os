@@ -131,6 +131,31 @@ class OpenAIProvider(LLMProvider):
     ) -> str:
         return self.call(prompt, tools=tools, timeout=timeout, cwd=cwd, system=system, cache=cache)
 
+    def call_session(
+        self,
+        messages: list[dict],
+        *,
+        model: str | None = None,
+        timeout: float | None = None,
+        system: str | None = None,
+        cache: bool = True,
+    ) -> tuple[str, list[dict]]:
+        """Send messages with conversation context and return ``(response_text, updated_messages)``."""
+        resolved = self._resolve_model(model)
+        api_messages = list(messages)
+        if system is not None:
+            api_messages = [{"role": "system", "content": system}] + api_messages
+        kwargs_api: dict = {
+            "model": resolved,
+            "messages": api_messages,
+        }
+        if timeout is not None:
+            kwargs_api["timeout"] = timeout
+        response = self._client.chat.completions.create(**kwargs_api)
+        text = response.choices[0].message.content or ""
+        updated = list(messages) + [{"role": "assistant", "content": text}]
+        return text, updated
+
     def call_json(self, prompt: str, **kwargs: object) -> dict | list:
         resolved = self._resolve_model(kwargs.pop("model", None))  # type: ignore[arg-type]
         response = self._client.chat.completions.create(
