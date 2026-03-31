@@ -78,6 +78,54 @@ crazypumpkin run
 crazypumpkin run --once
 ```
 
+## Running Individual Agents
+
+You can run any agent from the minimal pipeline on-demand using `cpos run-agent`.
+This is useful for testing, debugging, or one-off executions without starting the
+full pipeline loop.
+
+### Run the Developer (code-generator) agent
+
+```bash
+cpos run-agent Developer --config examples/minimal-pipeline/config.yaml
+```
+
+### Run the Strategist agent
+
+```bash
+cpos run-agent Strategist --config examples/minimal-pipeline/config.yaml
+```
+
+### Pass parameters for a one-off execution
+
+Use `--param` to inject key=value pairs into the agent context:
+
+```bash
+cpos run-agent Developer --config examples/minimal-pipeline/config.yaml \
+  --param model=opus --param verbose=true
+```
+
+You can also set a timeout to limit execution time:
+
+```bash
+cpos run-agent Developer --config examples/minimal-pipeline/config.yaml \
+  --timeout 120
+```
+
+### Expected output
+
+A successful run prints a summary like this:
+
+```
+Running agent 'Developer' ...
+
+Agent: Developer
+Status: success
+Duration: 1.23s
+Output: Hello, working on: On-demand run: Developer
+Artifacts: result.txt
+```
+
 ## Configuration Breakdown
 
 ### Company Section

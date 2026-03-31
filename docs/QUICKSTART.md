@@ -144,6 +144,59 @@ if __name__ == "__main__":
     print(f"Artifacts: {result.artifacts}")
 ```
 
+## Running Agents On-Demand
+
+Use `cpos run-agent` to execute a single agent without starting the full pipeline.
+This is useful for testing, debugging, and one-off tasks.
+
+### Basic usage
+
+```bash
+cpos run-agent hello-agent
+```
+
+### With a custom config file
+
+```bash
+cpos run-agent hello-agent --config path/to/config.yaml
+```
+
+### Passing parameters
+
+Use `--param` to pass key=value pairs into the agent context:
+
+```bash
+cpos run-agent hello-agent --param greeting=Hey --param verbose=true
+```
+
+### Setting a timeout
+
+Use `--timeout` to limit execution time (in seconds):
+
+```bash
+cpos run-agent hello-agent --timeout 30
+```
+
+### Expected output
+
+```
+Running agent 'hello-agent' ...
+
+Agent: hello-agent
+Status: success
+Duration: 0.42s
+Output: Hey, working on: On-demand run: hello-agent
+Artifacts: result.txt
+```
+
+### Troubleshooting
+
+| Problem | Message | Fix |
+| --- | --- | --- |
+| Agent not registered | `Agent not found: 'my-agent'` | Check agent name matches config or `@register_agent` decorator |
+| Execution too slow | Agent `timed out` after N seconds | Increase `--timeout` or check agent logic |
+| Missing config | `No configuration file found` | Pass `--config path/to/config.yaml` or run from project root |
+
 ## API Reference
 
 | Class / Function | Import | Purpose |
