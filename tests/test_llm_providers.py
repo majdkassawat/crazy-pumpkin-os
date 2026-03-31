@@ -34,6 +34,8 @@ class MockLLMProvider(LLMProvider):
         timeout: float | None = None,
         cwd: str | None = None,
         tools: list | None = None,
+        system: str | None = None,
+        cache: bool = True,
     ) -> str:
         self.last_prompt = prompt
         return f"mock-response:{prompt}"
@@ -750,6 +752,9 @@ def _make_openai_response(text: str):
     message = SimpleNamespace(content=text)
     choice = SimpleNamespace(message=message)
     return SimpleNamespace(choices=[choice])
+
+
+_has_openai = pytest.importorskip("openai", reason="openai package not installed")
 
 
 class TestOpenAIProvider:
