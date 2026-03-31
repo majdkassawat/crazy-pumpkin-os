@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from crazypumpkin.framework.models import (
-    Agent, AgentConfig, AgentMetrics, Approval, ApprovalStatus, ChangeProposal,
-    Project, ProjectStatus, ProposalStatus, ProposalType, Review,
-    ReviewDecision, Task, TaskOutput, TaskStatus,
+    Agent, AgentConfig, AgentMetrics, AgentRun, Approval, ApprovalStatus,
+    ChangeProposal, Project, ProjectStatus, ProposalStatus, ProposalType,
+    Review, ReviewDecision, RunStatus, Task, TaskOutput, TaskResult, TaskStatus,
 )
 
 
@@ -44,10 +44,24 @@ class Store:
         self.reviews: dict[str, Review] = {}
         self.approvals: dict[str, Approval] = {}
         self.proposals: dict[str, ChangeProposal] = {}
+        self._agents: dict[str, Agent] = {}
         self._agent_metrics: dict[str, AgentMetrics] = {}
+        self._runs: dict[str, AgentRun] = {}
+        self._task_results: dict[str, TaskResult] = {}  # keyed by task_id
         self._data_dir = data_dir
         if data_dir:
             data_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Agents ──
+
+    def register_agent(self, agent: Agent) -> None:
+        self._agents[agent.name] = agent
+
+    def get_agent(self, name: str) -> Agent | None:
+        return self._agents.get(name)
+
+    def list_agents(self) -> list[Agent]:
+        return list(self._agents.values())
 
     # ── Projects ──
 
@@ -91,6 +105,38 @@ class Store:
 
     def add_proposal(self, proposal: ChangeProposal) -> None:
         self.proposals[proposal.id] = proposal
+
+    # ── Run Tracking ──
+
+    def start_run(self, agent_name: str, run_id: str) -> AgentRun:
+        run = AgentRun(run_id=run_id, agent_name=agent_name, status=RunStatus.RUNNING)
+        self._runs[run_id] = run
+        return run
+
+    def get_run(self, run_id: str) -> AgentRun | None:
+        return self._runs.get(run_id)
+
+    def complete_run(self, run_id: str) -> None:
+        from crazypumpkin.framework.models import _now
+        run = self._runs[run_id]
+        run.status = RunStatus.COMPLETED
+        run.finished_at = _now()
+
+    def fail_run(self, run_id: str, error: str = "") -> None:
+        from crazypumpkin.framework.models import _now
+        run = self._runs[run_id]
+        run.status = RunStatus.FAILED
+        run.error = error
+        run.finished_at = _now()
+
+    def list_runs(self, agent_name: str) -> list[AgentRun]:
+        return [r for r in self._runs.values() if r.agent_name == agent_name]
+
+    def store_task_result(self, result: TaskResult) -> None:
+        self._task_results[result.task_id] = result
+
+    def get_task_result(self, task_id: str) -> TaskResult | None:
+        return self._task_results.get(task_id)
 
     # ── Agent Metrics ──
 

@@ -353,6 +353,37 @@ class AgentMetrics:
     recent_outcomes: list[bool] = field(default_factory=list)
 
 
+# ── Run Tracking ──────────────────────────────────────────────────────
+
+class RunStatus(str, Enum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass
+class AgentRun:
+    """Tracks a single agent run."""
+    run_id: str = field(default_factory=_uid)
+    agent_name: str = ""
+    status: RunStatus = RunStatus.RUNNING
+    error: str = ""
+    started_at: str = field(default_factory=_now)
+    finished_at: str = ""
+
+
+@dataclass
+class TaskResult:
+    """Result of a single task within a run."""
+    task_id: str = field(default_factory=_uid)
+    run_id: str = ""
+    name: str = ""
+    status: str = "success"
+    output: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=_now)
+
+
 # ── Plugin ──────────────────────────────────────────────────────────
 
 @dataclass

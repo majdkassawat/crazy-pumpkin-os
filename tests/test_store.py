@@ -17,6 +17,9 @@ _registry_mod = importlib.import_module("crazypumpkin.framework.registry")
 _agent_mod = importlib.import_module("crazypumpkin.framework.agent")
 
 Agent = _models.Agent
+AgentRun = _models.AgentRun
+RunStatus = _models.RunStatus
+TaskResult = _models.TaskResult
 AgentConfig = _models.AgentConfig
 Approval = _models.Approval
 ApprovalStatus = _models.ApprovalStatus
@@ -697,3 +700,73 @@ class TestValidateStore:
         assert "stale_id" in orphaned
         assert s2.get_task("t1").assigned_to == ""
         assert len(s2.get_all_agent_metrics()) == 0
+
+
+# ── Run Tracking & Task Results ──────────────────────────────────
+
+
+import pytest
+
+
+@pytest.fixture
+def store():
+    return Store()
+
+
+class TestRunTracking:
+    def test_start_run(self, store):
+        run = store.start_run("my-agent", "run-1")
+        assert run.status == RunStatus.RUNNING
+        assert run.agent_name == "my-agent"
+        assert run.run_id == "run-1"
+        # Also retrievable
+        fetched = store.get_run("run-1")
+        assert fetched is run
+
+    def test_complete_run(self, store):
+        store.start_run("my-agent", "run-2")
+        assert store.get_run("run-2").status == RunStatus.RUNNING
+        store.complete_run("run-2")
+        run = store.get_run("run-2")
+        assert run.status == RunStatus.COMPLETED
+        assert run.finished_at != ""
+
+    def test_fail_run(self, store):
+        store.start_run("my-agent", "run-3")
+        assert store.get_run("run-3").status == RunStatus.RUNNING
+        store.fail_run("run-3", error="something broke")
+        run = store.get_run("run-3")
+        assert run.status == RunStatus.FAILED
+        assert run.error == "something broke"
+        assert run.finished_at != ""
+
+    def test_store_task_result(self, store):
+        tr = TaskResult(
+            task_id="task-1",
+            run_id="run-1",
+            name="build",
+            status="success",
+            output="compiled OK",
+            metadata={"duration": 3.5},
+        )
+        store.store_task_result(tr)
+        fetched = store.get_task_result("task-1")
+        assert fetched is not None
+        assert fetched.task_id == "task-1"
+        assert fetched.run_id == "run-1"
+        assert fetched.name == "build"
+        assert fetched.status == "success"
+        assert fetched.output == "compiled OK"
+        assert fetched.metadata == {"duration": 3.5}
+        assert fetched.created_at != ""
+
+    def test_list_runs(self, store):
+        store.start_run("agent-a", "r1")
+        store.start_run("agent-b", "r2")
+        store.start_run("agent-a", "r3")
+        runs = store.list_runs("agent-a")
+        assert len(runs) == 2
+        assert {r.run_id for r in runs} == {"r1", "r3"}
+
+    def test_get_run_not_found(self, store):
+        assert store.get_run("nonexistent") is None
