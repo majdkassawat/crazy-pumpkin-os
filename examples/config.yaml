@@ -22,6 +22,10 @@ llm:
     #   api_key: ${OPENAI_API_KEY}
     # ollama:
     #   base_url: http://localhost:11434
+    # litellm:                                    # LiteLLM provider — enables cost tracking via Langfuse
+    #   model: gpt-4o                             # any model supported by LiteLLM
+    #   langfuse_public_key: ${LANGFUSE_PUBLIC_KEY}
+    #   langfuse_secret_key: ${LANGFUSE_SECRET_KEY}
 
   # Which model each agent role uses
   agent_models:
@@ -30,6 +34,7 @@ llm:
     reviewer:   { model: claude-sonnet-4-6 }
     architect:  { model: claude-sonnet-4-6 }
     strategy_agent: { model: claude-sonnet-4-6 }
+    # developer: { provider: litellm, model: gpt-4o }   # example: route developer agent through LiteLLM for cost tracking
 
 agents:
   # Canonical 3-agent roster

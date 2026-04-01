@@ -36,6 +36,7 @@ class MockLLMProvider(LLMProvider):
         tools: list | None = None,
         system: str | None = None,
         cache: bool = True,
+        agent: str | None = None,
     ) -> str:
         self.last_prompt = prompt
         return f"mock-response:{prompt}"
@@ -52,6 +53,8 @@ class MockLLMProvider(LLMProvider):
         tools: list | None = None,
         timeout: float | None = None,
         cwd: str | None = None,
+        system: str | None = None,
+        agent: str | None = None,
     ) -> str:
         self.last_prompt = prompt
         return f"mock-multi-turn:{prompt}"
