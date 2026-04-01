@@ -363,26 +363,205 @@ def cmd_goal(args):
 @friendly_errors
 def cmd_status(args):
     """Show current company status."""
+    import json as _json
     from crazypumpkin.framework.config import load_config
+    from crazypumpkin.framework.models import ProjectStatus, TaskStatus
+    from crazypumpkin.framework.store import Store
     from crazypumpkin.observability.metrics import get_cache_stats
 
     config = load_config()
-    cycle_interval = config.pipeline.get("cycle_interval", 30)
-    print(f"Company: {config.company.get('name', 'Unknown')}")
-    print(f"cycle_interval: {cycle_interval}s")
-    print("Tasks — pending: 0  running: 0  complete: 0")
+    store = Store()
+    store.load()
 
-    # Prompt Cache section
+    company = config.company.get("name", "Unknown")
+    cycle_interval = config.pipeline.get("cycle_interval", 30)
     cache = get_cache_stats()
-    total = cache["hits"] + cache["misses"]
-    if total == 0:
-        print("Prompt Cache: no data")
+
+    _pending = {TaskStatus.CREATED.value, TaskStatus.PLANNED.value, TaskStatus.ASSIGNED.value}
+    _running = {TaskStatus.IN_PROGRESS.value, TaskStatus.SUBMITTED_FOR_REVIEW.value, TaskStatus.APPROVED.value}
+    _complete = {TaskStatus.COMPLETED.value, TaskStatus.ARCHIVED.value}
+
+    all_tasks = list(store.tasks.values())
+    pending = sum(1 for t in all_tasks if t.status.value in _pending)
+    running = sum(1 for t in all_tasks if t.status.value in _running)
+    complete = sum(1 for t in all_tasks if t.status.value in _complete)
+    escalated = sum(1 for t in all_tasks if t.status == TaskStatus.ESCALATED)
+    rejected = sum(1 for t in all_tasks if t.status == TaskStatus.REJECTED)
+
+    active_projects = [p for p in store.projects.values() if p.status == ProjectStatus.ACTIVE]
+    all_metrics = store.get_all_agent_metrics()
+    recent_tasks = sorted(all_tasks, key=lambda t: t.updated_at, reverse=True)[:5]
+
+    use_json = getattr(args, "json", False)
+
+    if use_json:
+        projects_data = []
+        for p in active_projects:
+            p_tasks = [t for t in all_tasks if t.project_id == p.id]
+            total = len(p_tasks)
+            comp = sum(1 for t in p_tasks if t.status.value in _complete)
+            progress_pct = (comp / total * 100) if total > 0 else 0
+            projects_data.append({
+                "name": p.name,
+                "completed": comp,
+                "total": total,
+                "progress_pct": round(progress_pct, 1),
+            })
+
+        agents_data = []
+        for m in all_metrics:
+            total_t = m.tasks_completed + m.tasks_rejected
+            rate = (m.tasks_completed / total_t * 100) if total_t > 0 else 0.0
+            s = "healthy" if rate >= 70 else ("degraded" if rate >= 40 else "critical")
+            agents_data.append({
+                "name": m.agent_name,
+                "status": s,
+                "completed": m.tasks_completed,
+                "rejected": m.tasks_rejected,
+                "success_rate_pct": round(rate, 1),
+            })
+
+        if all_metrics:
+            total_comp = sum(m.tasks_completed for m in all_metrics)
+            total_all = sum(m.tasks_completed + m.tasks_rejected for m in all_metrics)
+            uptime = (total_comp / total_all * 100) if total_all > 0 else 0.0
+            sh_status = "healthy" if uptime >= 70 else ("degraded" if uptime >= 40 else "critical")
+            system_health = {"status": sh_status, "uptime_pct": round(uptime, 1)}
+        else:
+            system_health = None
+
+        print(_json.dumps({
+            "company": company,
+            "cycle_interval": cycle_interval,
+            "projects": projects_data,
+            "tasks": {
+                "pending": pending,
+                "running": running,
+                "complete": complete,
+                "escalated": escalated,
+                "rejected": rejected,
+            },
+            "agents": agents_data,
+            "system_health": system_health,
+            "recent_activity": [
+                {"status": t.status.value, "title": t.title, "updated": t.updated_at}
+                for t in recent_tasks
+            ],
+            "prompt_cache": cache,
+        }, indent=2))
     else:
-        print("Prompt Cache:")
-        print(f"  hits: {cache['hits']}")
-        print(f"  misses: {cache['misses']}")
-        print(f"  hit_rate: {cache['hit_rate_pct']}%")
-        print(f"  tokens_saved: {cache['tokens_saved']}")
+        from rich.console import Console
+        from rich.table import Table
+        from rich.panel import Panel
+        from rich.progress_bar import ProgressBar
+        from rich.text import Text
+
+        console = Console()
+
+        # Header
+        console.print(Panel(
+            f"[bold cyan]{company}[/bold cyan]  —  cycle interval: [bold]{cycle_interval}s[/bold]",
+            title="[bold]Crazy Pumpkin OS Status[/bold]",
+        ))
+
+        # Projects table with progress bars
+        if active_projects:
+            proj_table = Table(title="Active projects", show_lines=False)
+            proj_table.add_column("Project", style="bold")
+            proj_table.add_column("Progress", min_width=20)
+            proj_table.add_column("Done", justify="right")
+            for p in active_projects:
+                p_tasks = [t for t in all_tasks if t.project_id == p.id]
+                total = len(p_tasks)
+                comp = sum(1 for t in p_tasks if t.status.value in _complete)
+                pct = (comp / total * 100) if total > 0 else 0
+                bar = ProgressBar(total=max(total, 1), completed=comp, width=20)
+                proj_table.add_row(p.name, bar, f"{comp}/{total} ({pct:.0f}%)")
+            console.print(proj_table)
+        else:
+            console.print("[dim]Active projects: none active[/dim]")
+        console.print()
+
+        # Tasks summary table with color-coded counts
+        task_table = Table(title="Tasks", show_header=True)
+        task_table.add_column("pending", style="yellow", justify="center")
+        task_table.add_column("running", style="blue", justify="center")
+        task_table.add_column("complete", style="green", justify="center")
+        task_table.add_column("escalated", style="red", justify="center")
+        task_table.add_column("rejected", style="magenta", justify="center")
+        task_table.add_row(str(pending), str(running), str(complete), str(escalated), str(rejected))
+        console.print(task_table)
+        console.print()
+
+        # Total progress bar (percentage of all complete)
+        total_tasks = pending + running + complete + escalated + rejected
+        if total_tasks > 0:
+            overall_pct = complete / total_tasks * 100
+            bar = ProgressBar(total=total_tasks, completed=complete, width=40)
+            console.print(Text.assemble("Overall: ", (f"{overall_pct:.0f}% ", "bold green"), ""), bar)
+            console.print()
+
+        # Agent health table
+        if all_metrics:
+            agent_table = Table(title="Agent health", show_lines=False)
+            agent_table.add_column("Agent", style="bold")
+            agent_table.add_column("Status", justify="center")
+            agent_table.add_column("Completed", justify="right")
+            agent_table.add_column("Rejected", justify="right")
+            agent_table.add_column("Success", justify="right")
+            for m in all_metrics:
+                total_t = m.tasks_completed + m.tasks_rejected
+                rate = (m.tasks_completed / total_t * 100) if total_t > 0 else 0.0
+                if rate >= 70:
+                    status_text = Text("healthy", style="green")
+                elif rate >= 40:
+                    status_text = Text("degraded", style="yellow")
+                else:
+                    status_text = Text("critical", style="red")
+                agent_table.add_row(
+                    m.agent_name, status_text,
+                    str(m.tasks_completed), str(m.tasks_rejected),
+                    f"{rate:.0f}%",
+                )
+            console.print(agent_table)
+        else:
+            console.print("[dim]Agent health: no data[/dim]")
+        console.print()
+
+        # Recent activity
+        if recent_tasks:
+            act_table = Table(title="Recent activity", show_lines=False)
+            act_table.add_column("Status", justify="center")
+            act_table.add_column("Title")
+            act_table.add_column("Updated", style="dim")
+            _status_colors = {
+                "completed": "green", "archived": "green",
+                "in_progress": "blue", "submitted_for_review": "blue",
+                "created": "yellow", "planned": "yellow", "assigned": "yellow",
+                "escalated": "red", "rejected": "magenta",
+            }
+            for t in recent_tasks:
+                color = _status_colors.get(t.status.value, "white")
+                act_table.add_row(
+                    Text(t.status.value, style=color),
+                    t.title,
+                    t.updated_at,
+                )
+            console.print(act_table)
+        else:
+            console.print("[dim]Recent activity: none[/dim]")
+        console.print()
+
+        # Prompt cache
+        total_cache = cache["hits"] + cache["misses"]
+        if total_cache == 0:
+            console.print("[dim]Prompt Cache: no data[/dim]")
+        else:
+            console.print("[bold]Prompt Cache:[/bold]")
+            console.print(f"  hits: {cache['hits']}")
+            console.print(f"  misses: {cache['misses']}")
+            console.print(f"  hit_rate: {cache['hit_rate_pct']}%")
+            console.print(f"  tokens_saved: {cache['tokens_saved']}")
 
 
 @friendly_errors
@@ -930,7 +1109,11 @@ def main():
     goal_parser.add_argument("name", help="Goal name")
     goal_parser.add_argument("description", nargs="?", default="", help="Goal description")
 
-    sub.add_parser("status", help="Show current company status")
+    status_parser = sub.add_parser("status", help="Show current company status")
+    status_parser.add_argument(
+        "--json", action="store_true", default=False,
+        help="Output status as machine-readable JSON",
+    )
     sub.add_parser("wizard", help="Interactive configuration wizard")
     sub.add_parser("doctor", help="Check environment health")
 
