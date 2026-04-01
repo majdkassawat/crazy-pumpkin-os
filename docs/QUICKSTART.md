@@ -156,8 +156,25 @@ if __name__ == "__main__":
 | `@register_agent` | `crazypumpkin.framework.registry` | Decorator to auto-register an agent class |
 | `default_registry` | `crazypumpkin.framework.registry` | The global agent registry instance |
 
+## Contributing: CI
+
+Before submitting a pull request, run the local CI checks to catch issues early:
+
+```bash
+bash scripts/ci_check.sh
+```
+
+To build the package locally:
+
+```bash
+bash scripts/build_dist.sh
+```
+
+For the full CI/CD pipeline documentation — including how to cut a release and configure PyPI trusted publishing — see [CICD.md](CICD.md).
+
 ## Next Steps
 
+- See [CICD.md](CICD.md) for CI/CD pipeline docs and release instructions
 - See [PLUGIN_GUIDE.md](../PLUGIN_GUIDE.md) for packaging agents as plugins
 - See [GETTING_STARTED.md](../GETTING_STARTED.md) for full project setup
 - See [API_DOCS.md](../API_DOCS.md) for detailed API documentation
