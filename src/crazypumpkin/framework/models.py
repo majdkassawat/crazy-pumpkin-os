@@ -86,6 +86,7 @@ class AgentDefinition:
     model: str = ""
     group: str = ""
     trigger: str = ""
+    cooldown_seconds: int = 0
     class_path: str = ""
 
 

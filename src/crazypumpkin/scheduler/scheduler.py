@@ -14,12 +14,14 @@ from crazypumpkin.framework.config import Config
 from crazypumpkin.framework.models import (
     Agent,
     AgentConfig,
+    AgentDefinition,
     AgentRole,
     ProductConfig,
     Task,
     TaskStatus,
 )
 from crazypumpkin.framework.store import Store
+from crazypumpkin.framework.trigger import evaluate_trigger
 from crazypumpkin.llm.registry import ProviderRegistry
 
 logger = logging.getLogger("crazypumpkin.scheduler")
@@ -128,6 +130,63 @@ class Scheduler:
     # Internals
     # ------------------------------------------------------------------
 
+    def _get_agent_def(self, agent_name: str) -> AgentDefinition | None:
+        """Look up an AgentDefinition by name from the config."""
+        for ad in self._config.agents:
+            if ad.name == agent_name:
+                return ad
+        return None
+
+    def _should_dispatch(self, agent_name: str, snapshot: dict[str, Any]) -> bool:
+        """Return True if *agent_name* should be dispatched this cycle.
+
+        Checks the agent's trigger expression and cooldown window.
+        """
+        agent_def = self._get_agent_def(agent_name)
+        trigger = (agent_def.trigger if agent_def and agent_def.trigger else "always")
+        cooldown = (agent_def.cooldown_seconds if agent_def else 0)
+
+        # Handle 'schedule' sentinel: resolve as True only when
+        # the cycle_interval timer has elapsed since last_run.
+        if trigger == "schedule":
+            if self.last_run is not None:
+                last_run_dt = datetime.fromisoformat(self.last_run)
+                elapsed = (datetime.now(timezone.utc) - last_run_dt).total_seconds()
+                cycle_interval = self._config.pipeline.get("cycle_interval", 30)
+                if elapsed < cycle_interval:
+                    logger.debug("Agent %s skipped: schedule not elapsed", agent_name)
+                    return False
+        else:
+            if not evaluate_trigger(trigger, snapshot):
+                logger.debug("Agent %s skipped: trigger %r evaluated False", agent_name, trigger)
+                return False
+
+        if cooldown > 0 and self._is_agent_on_cooldown(agent_name, cooldown):
+            logger.debug("Agent %s skipped: on cooldown", agent_name)
+            return False
+
+        return True
+
+    def _build_snapshot(self, store: Store) -> dict[str, Any]:
+        """Build a snapshot dict for trigger evaluation."""
+        planned_count = sum(
+            1 for t in store.tasks.values() if t.status == TaskStatus.PLANNED
+        )
+        in_progress_count = sum(
+            1 for t in store.tasks.values() if t.status == TaskStatus.IN_PROGRESS
+        )
+        if self.last_run is not None:
+            last_run_dt = datetime.fromisoformat(self.last_run)
+            hours_since = (datetime.now(timezone.utc) - last_run_dt).total_seconds() / 3600.0
+        else:
+            hours_since = float("inf")
+
+        return {
+            "planned_tasks": planned_count,
+            "in_progress_tasks": in_progress_count,
+            "hours_since_last_run": hours_since,
+        }
+
     def _process_product(self, product: ProductConfig) -> dict[str, Any]:
         """Run the full pipeline for a single product."""
         workspace = Path(product.workspace or ".")
@@ -136,6 +195,13 @@ class Scheduler:
 
         store = Store(data_dir=data_dir)
         store.load()
+
+        # Build trigger evaluation snapshot
+        snapshot = self._build_snapshot(store)
+
+        # Determine which agents should be dispatched this cycle
+        dispatch_strategy = self._should_dispatch("StrategyAgent", snapshot)
+        dispatch_codegen = self._should_dispatch("CodeGeneratorAgent", snapshot)
 
         # Build agent model objects
         strategy_agent_model = Agent(
@@ -169,28 +235,30 @@ class Scheduler:
 
         for goal in pending_goals:
             # 2. Invoke StrategyAgent to decompose goal into developer tasks
-            context: dict[str, Any] = {"workspace": str(workspace)}
-            self.agent_last_dispatch["StrategyAgent"] = datetime.now(timezone.utc).isoformat()
-            strategy_output = strategy_agent.execute(goal, context)
+            if dispatch_strategy:
+                context: dict[str, Any] = {"workspace": str(workspace)}
+                self.agent_last_dispatch["StrategyAgent"] = datetime.now(timezone.utc).isoformat()
+                strategy_output = strategy_agent.execute(goal, context)
 
-            # Mark the goal as planned
-            if goal.can_transition(TaskStatus.PLANNED):
-                goal.transition(TaskStatus.PLANNED, reason="Decomposed by StrategyAgent")
+                # Mark the goal as planned
+                if goal.can_transition(TaskStatus.PLANNED):
+                    goal.transition(TaskStatus.PLANNED, reason="Decomposed by StrategyAgent")
 
             # 3. Invoke CodeGeneratorAgent for each newly created task
             #    (tasks added to store by the strategy agent are in CREATED status)
-            new_tasks = [
-                t for t in store.tasks.values()
-                if t.status == TaskStatus.CREATED and t.project_id == goal.project_id
-            ]
-            for task in new_tasks:
-                code_context: dict[str, Any] = {"workspace": str(workspace)}
-                self.agent_last_dispatch["CodeGeneratorAgent"] = datetime.now(timezone.utc).isoformat()
-                code_output = code_generator.execute(task, code_context)
-                task.output = code_output
-                if task.can_transition(TaskStatus.PLANNED):
-                    task.transition(TaskStatus.PLANNED, reason="Code generated")
-                tasks_processed += 1
+            if dispatch_codegen:
+                new_tasks = [
+                    t for t in store.tasks.values()
+                    if t.status == TaskStatus.CREATED and t.project_id == goal.project_id
+                ]
+                for task in new_tasks:
+                    code_context: dict[str, Any] = {"workspace": str(workspace)}
+                    self.agent_last_dispatch["CodeGeneratorAgent"] = datetime.now(timezone.utc).isoformat()
+                    code_output = code_generator.execute(task, code_context)
+                    task.output = code_output
+                    if task.can_transition(TaskStatus.PLANNED):
+                        task.transition(TaskStatus.PLANNED, reason="Code generated")
+                    tasks_processed += 1
 
         # 4. Persist run state
         store.save()
