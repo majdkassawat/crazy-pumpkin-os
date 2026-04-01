@@ -23,6 +23,10 @@ _cache_hits: int = 0
 _cache_misses: int = 0
 _cache_tokens_saved: int = 0
 
+# Per-provider cache counters
+_cr_hits_by_provider: dict[str, int] = {}
+_cr_misses_by_provider: dict[str, int] = {}
+
 # Gauges  (agent_id -> start-timestamp)
 _agent_start_times: dict[str, float] = {}
 
@@ -64,8 +68,8 @@ def record_agent_uptime(agent_id: str) -> None:
         _agent_start_times[agent_id] = time.monotonic()
 
 
-def record_cache_event(provider: str, hit: bool, tokens_saved: int = 0) -> None:
-    """Record a cache hit or miss for an LLM provider.
+def record_cache_result(provider: str, hit: bool, tokens_saved: int = 0) -> None:
+    """Record a cache hit or miss for an LLM provider, tracking per-provider counts.
 
     Args:
         provider: Name of the LLM provider (e.g. ``"anthropic"``).
@@ -77,25 +81,32 @@ def record_cache_event(provider: str, hit: bool, tokens_saved: int = 0) -> None:
         if hit:
             _cache_hits += 1
             _cache_tokens_saved += tokens_saved
+            _cr_hits_by_provider[provider] = _cr_hits_by_provider.get(provider, 0) + 1
         else:
             _cache_misses += 1
+            _cr_misses_by_provider[provider] = _cr_misses_by_provider.get(provider, 0) + 1
 
 
-def get_cache_stats() -> dict[str, int]:
+def record_cache_event(provider: str, hit: bool, tokens_saved: int = 0) -> None:
+    """Alias for record_cache_result for backwards compatibility."""
+    record_cache_result(provider, hit, tokens_saved)
+
+
+def get_cache_stats() -> dict:
     """Return current cache statistics.
 
     Returns:
-        A dict with keys ``hits``, ``misses``, ``tokens_saved``, and
-        ``hit_rate_pct`` (integer 0-100).
+        A dict with keys ``total_hits``, ``total_misses``, ``total_tokens_saved``,
+        and ``hit_rate`` (float 0.0-1.0).
     """
     with _lock:
         total = _cache_hits + _cache_misses
-        hit_rate = (_cache_hits * 100 // total) if total else 0
+        hit_rate = (_cache_hits / total) if total else 0.0
         return {
-            "hits": _cache_hits,
-            "misses": _cache_misses,
-            "tokens_saved": _cache_tokens_saved,
-            "hit_rate_pct": hit_rate,
+            "total_hits": _cache_hits,
+            "total_misses": _cache_misses,
+            "total_tokens_saved": _cache_tokens_saved,
+            "hit_rate": hit_rate,
         }
 
 
@@ -158,3 +169,5 @@ def reset() -> None:
         _cache_hits = 0
         _cache_misses = 0
         _cache_tokens_saved = 0
+        _cr_hits_by_provider.clear()
+        _cr_misses_by_provider.clear()

@@ -40,11 +40,12 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 class AnthropicProvider(LLMProvider):
     """LLM provider backed by the Anthropic messages API."""
 
-    def __init__(self, config: dict | None = None) -> None:
+    def __init__(self, config: dict | None = None, *, cache_enabled: bool = True) -> None:
         config = config or {}
         api_key = config.get("api_key") or os.environ.get("ANTHROPIC_API_KEY")
         self._client = Anthropic(api_key=api_key)
         self._default_model = config.get("model", DEFAULT_MODEL)
+        self.cache_enabled = cache_enabled
 
     def _resolve_model(self, model: str | None) -> str:
         name = model or self._default_model
@@ -86,10 +87,15 @@ class AnthropicProvider(LLMProvider):
         else:
             record_cache_event("anthropic", hit=False)
 
+    def _apply_tool_cache_control(self, tools: list[dict]) -> None:
+        """Add cache_control to the last tool definition (idempotent)."""
+        if tools:
+            tools[-1]["cache_control"] = {"type": "ephemeral"}
+
     def _build_system_blocks(self, system: str, cache: bool) -> list[dict]:
         """Build the ``system`` parameter content blocks."""
         blocks: list[dict] = [{"type": "text", "text": system}]
-        if cache:
+        if cache and self.cache_enabled:
             self._apply_cache_control(blocks)
         return blocks
 
@@ -117,6 +123,8 @@ class AnthropicProvider(LLMProvider):
             kwargs["timeout"] = timeout
         if tools:
             kwargs["tools"] = tools
+            if cache and self.cache_enabled:
+                self._apply_tool_cache_control(tools)
         response = self._client.messages.create(**kwargs)
         self._record_cache_from_usage(response)
         parts = [block.text for block in response.content if block.type == "text"]

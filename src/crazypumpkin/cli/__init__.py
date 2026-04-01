@@ -374,15 +374,15 @@ def cmd_status(args):
 
     # Prompt Cache section
     cache = get_cache_stats()
-    total = cache["hits"] + cache["misses"]
+    total = cache["total_hits"] + cache["total_misses"]
     if total == 0:
         print("Prompt Cache: no data")
     else:
         print("Prompt Cache:")
-        print(f"  hits: {cache['hits']}")
-        print(f"  misses: {cache['misses']}")
-        print(f"  hit_rate: {cache['hit_rate_pct']}%")
-        print(f"  tokens_saved: {cache['tokens_saved']}")
+        print(f"  hits: {cache['total_hits']}")
+        print(f"  misses: {cache['total_misses']}")
+        print(f"  hit_rate: {cache['hit_rate']:.0%}")
+        print(f"  tokens_saved: {cache['total_tokens_saved']}")
 
 
 @friendly_errors
