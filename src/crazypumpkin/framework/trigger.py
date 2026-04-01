@@ -413,3 +413,59 @@ class CronTrigger:
             and now.month in month
             and cron_dow in dow
         )
+
+
+# ---------------------------------------------------------------------------
+# TriggerEvaluator — orchestrates multiple triggers
+# ---------------------------------------------------------------------------
+
+
+class TriggerEvaluator:
+    """Registry that evaluates multiple named triggers and returns those that fire.
+
+    Each trigger is registered with a unique name and can be a
+    :class:`CronTrigger`, :class:`EventTrigger`, or :class:`ConditionalTrigger`.
+    """
+
+    def __init__(self) -> None:
+        self._triggers: dict[str, Any] = {}
+
+    def register(self, name: str, trigger: Any) -> None:
+        """Register a trigger under *name*."""
+        self._triggers[name] = trigger
+
+    @property
+    def triggers(self) -> dict[str, Any]:
+        """Return the internal trigger mapping (read-only view)."""
+        return dict(self._triggers)
+
+    def evaluate_all(
+        self,
+        *,
+        now: _dt.datetime | None = None,
+        event: Any | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> list[str]:
+        """Evaluate every registered trigger and return names of those that fire.
+
+        Parameters
+        ----------
+        now:
+            Current datetime for :class:`CronTrigger` evaluation.
+        event:
+            Event object for :class:`EventTrigger` matching.
+        context:
+            Snapshot dict for :class:`ConditionalTrigger` evaluation.
+        """
+        fired: list[str] = []
+        for name, trigger in self._triggers.items():
+            if isinstance(trigger, CronTrigger):
+                if trigger.should_fire(now=now):
+                    fired.append(name)
+            elif isinstance(trigger, EventTrigger):
+                if event is not None and trigger.matches(event):
+                    fired.append(name)
+            elif isinstance(trigger, ConditionalTrigger):
+                if context is not None and trigger.evaluate(context):
+                    fired.append(name)
+        return fired

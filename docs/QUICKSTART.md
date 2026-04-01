@@ -156,6 +156,84 @@ if __name__ == "__main__":
 | `@register_agent` | `crazypumpkin.framework.registry` | Decorator to auto-register an agent class |
 | `default_registry` | `crazypumpkin.framework.registry` | The global agent registry instance |
 
+## Trigger Expressions
+
+Crazy Pumpkin OS supports three trigger types that control when agents and pipelines run. You can combine them using `TriggerEvaluator` to orchestrate complex scheduling.
+
+### Cron Syntax
+
+`CronTrigger` accepts standard 5-field cron expressions: `minute hour day_of_month month day_of_week`.
+
+| Expression | Meaning |
+| --- | --- |
+| `*/15 * * * *` | Every 15 minutes |
+| `0 9 * * MON-FRI` | Weekdays at 9:00 AM |
+| `30 2 1 * *` | 2:30 AM on the 1st of every month |
+
+```python
+from crazypumpkin.framework.trigger import CronTrigger
+
+trigger = CronTrigger("*/15 * * * *")
+if trigger.should_fire():
+    print("Time to run!")
+```
+
+### Event Topic Filters
+
+`EventTrigger` matches events by their `action` field. Supports exact matches and glob-style wildcards.
+
+| Pattern | Matches |
+| --- | --- |
+| `task_created` | Only `task_created` events |
+| `task_*` | Any event starting with `task_` (e.g. `task_created`, `task_completed`) |
+| `*` | All events |
+
+```python
+from crazypumpkin.framework.trigger import EventTrigger
+
+trigger = EventTrigger(topic="task_*")
+if trigger.matches(event):
+    print(f"Matched event: {event.action}")
+```
+
+### Conditional Expressions
+
+`ConditionalTrigger` evaluates comparison expressions against a context dict. Supports `>`, `<`, `==`, `>=`, `<=` operators and `AND`/`OR` logical combinators. Dotted keys (e.g. `metrics.cpu`) resolve nested dicts.
+
+| Expression | Fires when |
+| --- | --- |
+| `cpu > 80` | CPU usage exceeds 80 |
+| `planned_tasks > 0 AND hours_since_last_run > 1` | There are pending tasks and at least 1 hour has passed |
+| `status == "active" OR priority > 5` | Status is active or priority is high |
+
+```python
+from crazypumpkin.framework.trigger import ConditionalTrigger
+
+trigger = ConditionalTrigger("cpu > 80 AND memory > 70")
+snapshot = {"cpu": 92, "memory": 85}
+if trigger.evaluate(snapshot):
+    print("System under pressure!")
+```
+
+### Combining Triggers with TriggerEvaluator
+
+`TriggerEvaluator` lets you register multiple triggers and evaluate them all at once:
+
+```python
+from crazypumpkin.framework.trigger import (
+    CronTrigger, EventTrigger, ConditionalTrigger, TriggerEvaluator,
+)
+
+evaluator = TriggerEvaluator()
+evaluator.register("nightly", CronTrigger("0 2 * * *"))
+evaluator.register("on-deploy", EventTrigger(topic="deploy_*"))
+evaluator.register("high-load", ConditionalTrigger("cpu > 90"))
+
+fired = evaluator.evaluate_all(now=now, event=event, context=metrics)
+for name in fired:
+    print(f"Trigger fired: {name}")
+```
+
 ## Next Steps
 
 - See [PLUGIN_GUIDE.md](../PLUGIN_GUIDE.md) for packaging agents as plugins
