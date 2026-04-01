@@ -1,5 +1,6 @@
 """Tests for crazypumpkin doctor CLI command."""
 
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -12,6 +13,8 @@ from crazypumpkin.cli.doctor import (
     _check_python_version,
     _check_dependencies,
     _check_config,
+    check_config_valid,
+    check_env_overrides,
     cmd_doctor,
     MIN_PYTHON,
     REQUIRED_DEPS,
@@ -147,3 +150,207 @@ def test_cmd_doctor_dep_failure(capsys):
     output = capsys.readouterr().out
     assert "[FAIL]" in output
     assert "httpx" in output
+
+
+# ── check_config_valid ────────────────────────────────────────────────
+
+
+def test_check_config_valid_ok():
+    """Valid config returns Config schema OK."""
+    config = {
+        "company": {"name": "TestCo"},
+        "agents": [{"name": "Dev", "role": "execution"}],
+    }
+    name, passed, detail = check_config_valid(config)
+    assert name == "Config schema"
+    assert passed is True
+    assert detail == "OK"
+
+
+def test_check_config_valid_fail_missing_company():
+    """Missing required field 'company' yields FAIL with detail."""
+    config = {"agents": [{"name": "Dev", "role": "execution"}]}
+    name, passed, detail = check_config_valid(config)
+    assert name == "Config schema"
+    assert passed is False
+    assert "FAIL" in detail
+    assert "company" in detail
+
+
+def test_check_config_valid_fail_missing_agents():
+    """Missing required field 'agents' yields FAIL."""
+    config = {"company": {"name": "TestCo"}}
+    name, passed, detail = check_config_valid(config)
+    assert name == "Config schema"
+    assert passed is False
+    assert "FAIL" in detail
+    assert "agents" in detail
+
+
+# ── check_env_overrides ──────────────────────────────────────────────
+
+
+def test_check_env_overrides_none_active():
+    """No CPOS_* env vars → 'none active'."""
+    # Clear any CPOS_* vars that might be set
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CPOS_")}
+    with patch.dict(os.environ, env, clear=True):
+        name, passed, detail = check_env_overrides({"company": {"name": "X"}})
+    assert name == "Env overrides"
+    assert passed is True
+    assert "none active" in detail
+
+
+def test_check_env_overrides_with_active():
+    """Active CPOS_* vars are reported."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CPOS_")}
+    env["CPOS_COMPANY__NAME"] = "OverrideCo"
+    with patch.dict(os.environ, env, clear=True):
+        name, passed, detail = check_env_overrides({"company": {"name": "X"}})
+    assert name == "Env overrides"
+    assert passed is True
+    assert "CPOS_COMPANY__NAME" in detail
+    assert "OverrideCo" in detail
+
+
+# ── cmd_doctor structured output ─────────────────────────────────────
+
+
+class _FakeConfig:
+    """A plain object whose __dict__ exposes valid config fields."""
+    def __init__(self, overrides=None):
+        self.company = {"name": "TestCo"}
+        self.agents = [{"name": "Dev", "role": "execution"}]
+        self.products = []
+        self.llm = {}
+        self.pipeline = {}
+        self.notifications = {}
+        self.dashboard = {}
+        self.voice = {}
+        if overrides:
+            self.__dict__.update(overrides)
+
+
+def _make_valid_config():
+    return _FakeConfig()
+
+
+def test_cmd_doctor_shows_config_schema_ok(capsys):
+    """Doctor output includes 'Config schema: OK' for valid config."""
+    mock_config = _make_valid_config()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CPOS_")}
+    with patch("crazypumpkin.cli.doctor._check_python_version", return_value=(True, "Python OK")), \
+         patch("crazypumpkin.cli.doctor._check_dependencies", return_value=[(True, "dep OK")]), \
+         patch("crazypumpkin.cli.doctor._check_config", return_value=(True, "config OK")), \
+         patch("crazypumpkin.cli.doctor._check_validation", return_value=(True, "config schema valid")), \
+         patch("crazypumpkin.framework.config.load_config", return_value=mock_config), \
+         patch.dict(os.environ, env, clear=True):
+        cmd_doctor(MagicMock())
+
+    output = capsys.readouterr().out
+    assert "Config schema: OK" in output
+
+
+def test_cmd_doctor_shows_config_schema_fail(capsys):
+    """Doctor output includes 'Config schema: FAIL' for invalid config."""
+    mock_config = _FakeConfig()
+    # Remove agents to trigger validation failure
+    del mock_config.agents
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CPOS_")}
+    with patch("crazypumpkin.cli.doctor._check_python_version", return_value=(True, "Python OK")), \
+         patch("crazypumpkin.cli.doctor._check_dependencies", return_value=[(True, "dep OK")]), \
+         patch("crazypumpkin.cli.doctor._check_config", return_value=(True, "config OK")), \
+         patch("crazypumpkin.cli.doctor._check_validation", return_value=(True, "config schema valid")), \
+         patch("crazypumpkin.framework.config.load_config", return_value=mock_config), \
+         patch.dict(os.environ, env, clear=True):
+        cmd_doctor(MagicMock())
+
+    output = capsys.readouterr().out
+    assert "Config schema: FAIL" in output
+    assert "agents" in output
+
+
+def test_cmd_doctor_shows_env_overrides(capsys):
+    """Doctor output includes 'Env overrides:' section listing CPOS_* vars."""
+    mock_config = _make_valid_config()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CPOS_")}
+    env["CPOS_COMPANY__NAME"] = "OverrideCo"
+    with patch("crazypumpkin.cli.doctor._check_python_version", return_value=(True, "Python OK")), \
+         patch("crazypumpkin.cli.doctor._check_dependencies", return_value=[(True, "dep OK")]), \
+         patch("crazypumpkin.cli.doctor._check_config", return_value=(True, "config OK")), \
+         patch("crazypumpkin.cli.doctor._check_validation", return_value=(True, "config schema valid")), \
+         patch("crazypumpkin.framework.config.load_config", return_value=mock_config), \
+         patch.dict(os.environ, env, clear=True):
+        cmd_doctor(MagicMock())
+
+    output = capsys.readouterr().out
+    assert "Env overrides:" in output
+    assert "CPOS_COMPANY__NAME" in output
+
+
+def test_cmd_doctor_env_overrides_none(capsys):
+    """Doctor output shows 'Env overrides: none active' when no CPOS_* vars set."""
+    mock_config = _make_valid_config()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CPOS_")}
+    with patch("crazypumpkin.cli.doctor._check_python_version", return_value=(True, "Python OK")), \
+         patch("crazypumpkin.cli.doctor._check_dependencies", return_value=[(True, "dep OK")]), \
+         patch("crazypumpkin.cli.doctor._check_config", return_value=(True, "config OK")), \
+         patch("crazypumpkin.cli.doctor._check_validation", return_value=(True, "config schema valid")), \
+         patch("crazypumpkin.framework.config.load_config", return_value=mock_config), \
+         patch.dict(os.environ, env, clear=True):
+        cmd_doctor(MagicMock())
+
+    output = capsys.readouterr().out
+    assert "Env overrides: none active" in output
+
+
+# ── Config loading applies env overrides ─────────────────────────────
+
+
+def test_config_loading_applies_env_overrides(tmp_path):
+    """Config loading in framework/config.py applies env overrides before returning."""
+    import yaml
+    config_data = {
+        "company": {"name": "OriginalCo"},
+        "products": [{"name": "P", "workspace": str(tmp_path)}],
+        "agents": [{"name": "Dev", "role": "execution"}],
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(config_data), encoding="utf-8")
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CPOS_")}
+    env["CPOS_COMPANY__NAME"] = "OverriddenCo"
+
+    from crazypumpkin.framework.config import load_config
+    with patch.dict(os.environ, env, clear=True):
+        cfg = load_config(tmp_path)
+
+    assert cfg.company["name"] == "OverriddenCo"
+
+
+# ── Init validates generated config ──────────────────────────────────
+
+
+def test_init_validates_default_template_no_warnings(tmp_path, capsys):
+    """cpos init validates the generated config and prints no warnings for default template."""
+    from crazypumpkin.cli import _write_init_files
+    from crazypumpkin.config.validation import validate_config
+    import yaml
+
+    # Use forward slashes to avoid YAML escaping issues on Windows
+    product_workspace = str(tmp_path / "products" / "app").replace("\\", "/")
+    answers = {
+        "company_name": "TestCo",
+        "provider": "anthropic_api",
+        "api_key": "sk-test",
+        "product_path": product_workspace,
+        "dashboard_password": "secret",
+    }
+    _write_init_files(answers, tmp_path)
+
+    config_text = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    config_dict = yaml.safe_load(config_text)
+    result = validate_config(config_dict)
+
+    # Default template should have no validation errors
+    assert result.valid is True, f"Validation errors: {[e.message for e in result.errors]}"

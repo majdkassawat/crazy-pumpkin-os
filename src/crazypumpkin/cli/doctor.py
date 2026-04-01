@@ -9,6 +9,8 @@ import importlib
 import sys
 
 from crazypumpkin.cli.errors import friendly_errors
+from crazypumpkin.config.validation import validate_config
+from crazypumpkin.config.env_override import resolve_env_overrides, list_active_overrides
 
 # Required packages mapped to their import names
 REQUIRED_DEPS: list[tuple[str, str]] = [
@@ -57,6 +59,50 @@ def _check_config() -> tuple[bool, str]:
         return False, f"config invalid: {exc}"
 
 
+def check_config_valid(config: dict) -> tuple[str, bool, str]:
+    """Doctor check: validate config schema. Returns (check_name, passed, detail)."""
+    result = validate_config(config)
+    if result.valid:
+        return ("Config schema", True, "OK")
+    details = "; ".join(f"{e.path}: {e.message}" for e in result.errors)
+    return ("Config schema", False, f"FAIL — {details}")
+
+
+def check_env_overrides(config: dict) -> tuple[str, bool, str]:
+    """Doctor check: report active env var overrides. Always passes, informational."""
+    active = list_active_overrides(config)
+    if not active:
+        return ("Env overrides", True, "none active")
+    lines = [f"{name}={value!r} -> {path}" for name, path, value in active]
+    return ("Env overrides", True, "; ".join(lines))
+
+
+def _check_validation() -> tuple[bool, str]:
+    """Run schema validation and env-override checks on the loaded config."""
+    try:
+        from crazypumpkin.framework.config import load_config
+        from crazypumpkin.config.validation import validate_config
+        from crazypumpkin.config.env_override import resolve_env_overrides, list_active_overrides
+
+        raw_config = load_config()
+        config_dict = raw_config if isinstance(raw_config, dict) else raw_config.__dict__
+        config_dict = resolve_env_overrides(config_dict)
+
+        result = validate_config(config_dict)
+        active = list_active_overrides(config_dict)
+
+        if not result.valid:
+            first_error = result.errors[0].message if result.errors else "unknown error"
+            return False, f"config schema invalid: {first_error}"
+
+        override_note = f" ({len(active)} env override(s) active)" if active else ""
+        return True, f"config schema valid{override_note}"
+    except FileNotFoundError:
+        return True, "config schema check skipped (no config file)"
+    except Exception as exc:
+        return False, f"config validation error: {exc}"
+
+
 @friendly_errors
 def cmd_doctor(args) -> None:
     """Run environment health checks and print results."""
@@ -79,6 +125,32 @@ def cmd_doctor(args) -> None:
     _print_check(ok, msg)
     if not ok:
         all_passed = False
+
+    # Config schema validation + env overrides
+    ok, msg = _check_validation()
+    _print_check(ok, msg)
+    if not ok:
+        all_passed = False
+
+    # Structured schema + env-override checks (using loaded config dict)
+    try:
+        from crazypumpkin.framework.config import load_config
+        raw_config = load_config()
+        config_dict = raw_config if isinstance(raw_config, dict) else raw_config.__dict__
+
+        name, passed, detail = check_config_valid(config_dict)
+        status_label = "OK" if passed else "FAIL"
+        print(f"  Config schema: {status_label}" + (f" — {detail}" if not passed else ""))
+        if not passed:
+            all_passed = False
+
+        name, passed, detail = check_env_overrides(config_dict)
+        print(f"  Env overrides: {detail}")
+    except FileNotFoundError:
+        print("  Config schema: SKIP (no config file)")
+        print("  Env overrides: SKIP (no config file)")
+    except Exception:
+        pass
 
     # Summary
     if all_passed:

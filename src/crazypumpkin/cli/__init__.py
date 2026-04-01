@@ -274,6 +274,20 @@ def cmd_init(args):
     }
 
     _write_init_files(answers, target_dir)
+
+    # Validate the generated config.yaml
+    try:
+        import yaml
+        from crazypumpkin.config.validation import validate_config
+        config_text = (target_dir / "config.yaml").read_text(encoding="utf-8")
+        config_dict = yaml.safe_load(config_text)
+        result = validate_config(config_dict)
+        if not result.valid:
+            for err in result.errors:
+                print(f"  [WARN] config validation: {err.path}: {err.message}")
+    except Exception:
+        pass  # validation is best-effort; don't block init
+
     print(f"\nInitialized '{company_name}' in {target_dir}")
     print(
         f"\nYour AI company '{company_name}' is ready!\n"

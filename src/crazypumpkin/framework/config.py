@@ -297,4 +297,9 @@ def load_config(project_root: Path | None = None) -> Config:
         raise FileNotFoundError(_CONFIG_NOT_FOUND.format(project_root))
 
     raw = _expand_vars(config)
+
+    # Apply environment variable overrides (CPOS_* vars)
+    from crazypumpkin.config.env_override import resolve_env_overrides
+    raw = resolve_env_overrides(raw)
+
     return _validate_and_build(raw, project_root)
