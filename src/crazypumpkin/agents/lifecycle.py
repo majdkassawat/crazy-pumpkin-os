@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from crazypumpkin.framework.models import AgentStatus
+from crazypumpkin.framework.models import AgentStatus, RunRecord
 
 if TYPE_CHECKING:
     from crazypumpkin.framework.registry import AgentRegistry
+    from crazypumpkin.framework.store import Store
 
 logger = logging.getLogger("crazypumpkin.lifecycle")
 
@@ -284,3 +287,73 @@ def managed_restart(
         stop_agent(registry, agent_id)
 
     return start_agent(registry, agent_id)
+
+
+async def execute_run(
+    registry: "AgentRegistry",
+    agent_id: str,
+    store: "Store",
+    *,
+    task: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> RunRecord:
+    """Execute a single run for an agent and persist the RunRecord.
+
+    If the agent is already active, the run is recorded as a failure
+    with an ``"already running"`` error.
+
+    Args:
+        registry: The agent registry.
+        agent_id: ID of the agent to run.
+        store: Store instance for persisting the run record.
+        task: Optional task description.
+        context: Optional execution context.
+
+    Returns:
+        The persisted ``RunRecord``.
+    """
+    run_id = str(uuid.uuid4())
+    started_at = datetime.now(timezone.utc)
+    record = RunRecord(
+        run_id=run_id,
+        agent_name=agent_id,
+        started_at=started_at,
+        status="pending",
+    )
+
+    base_agent = registry.get(agent_id)
+    if base_agent is None:
+        record.status = "failure"
+        record.error = f"Agent '{agent_id}' not found"
+        record.finished_at = datetime.now(timezone.utc)
+        record.duration_ms = (record.finished_at - started_at).total_seconds() * 1000
+        await store.save_run_record(record)
+        return record
+
+    if base_agent.agent.status == AgentStatus.ACTIVE:
+        record.status = "failure"
+        record.error = f"Agent '{agent_id}' is already running"
+        record.finished_at = datetime.now(timezone.utc)
+        record.duration_ms = (record.finished_at - started_at).total_seconds() * 1000
+        await store.save_run_record(record)
+        return record
+
+    try:
+        base_agent.agent.status = AgentStatus.ACTIVE
+        if task is not None:
+            from crazypumpkin.framework.models import Task as TaskModel, TaskStatus
+
+            t = TaskModel(id=str(uuid.uuid4()), title=task, status=TaskStatus.IN_PROGRESS)
+            base_agent.execute(t, context or {})
+
+        record.status = "success"
+    except Exception as exc:
+        record.status = "failure"
+        record.error = str(exc)
+    finally:
+        base_agent.agent.status = AgentStatus.IDLE
+        record.finished_at = datetime.now(timezone.utc)
+        record.duration_ms = (record.finished_at - started_at).total_seconds() * 1000
+        await store.save_run_record(record)
+
+    return record

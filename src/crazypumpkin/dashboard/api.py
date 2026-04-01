@@ -97,3 +97,33 @@ def get_dashboard_data(
             "total_usd": round(total_usd, 4),
         },
     }
+
+
+def get_agent_statuses(registry: "AgentRegistry") -> list[dict]:
+    """Return a list of status dicts for every registered agent.
+
+    Each dict contains:
+      - name: agent display name
+      - status: current status string (e.g. "active", "idle", "disabled")
+      - last_heartbeat: ISO timestamp of last heartbeat, or None
+      - tasks_completed: number of completed tasks (int)
+      - health: "healthy" | "degraded" based on agent status
+    """
+    result: list[dict] = []
+    for agent in registry._agents.values():
+        status_val = (
+            agent.agent.status.value
+            if hasattr(agent.agent.status, "value")
+            else str(agent.agent.status)
+        )
+        health = "degraded" if agent.agent.status == AgentStatus.DISABLED else "healthy"
+        last_hb = getattr(agent.agent, "last_heartbeat", None)
+        tasks_done = getattr(agent.agent, "tasks_completed", 0)
+        result.append({
+            "name": agent.name,
+            "status": status_val,
+            "last_heartbeat": last_hb,
+            "tasks_completed": tasks_done,
+            "health": health,
+        })
+    return result

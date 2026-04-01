@@ -368,3 +368,17 @@ class PluginManifest:
     min_framework_version: str = ""
     permissions: list[str] = field(default_factory=list)
     requires: list[str] = field(default_factory=list)
+
+
+# ── Run History ──────────────────────────────────────────────────────
+
+@dataclass
+class RunRecord:
+    """Record of a single agent execution run."""
+    run_id: str = ""
+    agent_name: str = ""
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: datetime | None = None
+    status: str = "pending"  # "pending", "success", "failure"
+    duration_ms: float | None = None
+    error: str | None = None
