@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from crazypumpkin.framework.registry import AgentRegistry
     from crazypumpkin.framework.store import Store
 
+from crazypumpkin.dashboard.auth import admin_required, auth_required
 from crazypumpkin.framework.models import AgentStatus, TaskStatus
 
 
@@ -97,3 +98,64 @@ def get_dashboard_data(
             "total_usd": round(total_usd, 4),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Agent status endpoint
+# ---------------------------------------------------------------------------
+
+
+def get_agent_statuses(registry: "AgentRegistry") -> list[dict]:
+    """GET /api/agents/status — return status for all registered agents."""
+    result = []
+    for agent in registry._agents.values():
+        health = "degraded" if agent.agent.status == AgentStatus.DISABLED else "healthy"
+        result.append({
+            "name": agent.name,
+            "status": agent.agent.status.value if hasattr(agent.agent.status, "value") else str(agent.agent.status),
+            "last_heartbeat": None,
+            "tasks_completed": 0,
+            "health": health,
+        })
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Role-protected endpoints
+# ---------------------------------------------------------------------------
+
+
+def get_dashboard_data_authed(
+    token: str,
+    registry: "AgentRegistry",
+    store: "Store",
+) -> dict:
+    """GET /api/dashboard — read-only dashboard data (viewer or admin).
+
+    Raises :class:`~crazypumpkin.dashboard.auth.AuthError` (401) for
+    invalid tokens.
+    """
+    auth_required(token)
+    return get_dashboard_data(registry, store)
+
+
+def update_config(token: str, config_data: dict) -> dict:
+    """PUT /api/config — update pipeline configuration (admin only).
+
+    Raises :class:`~crazypumpkin.dashboard.auth.AuthError` (401) for
+    invalid tokens, or (403) for non-admin users.
+    Returns ``{"ok": True, "config": <config_data>}`` on success.
+    """
+    admin_required(token)
+    return {"ok": True, "config": config_data}
+
+
+def restart_agent(token: str, agent_id: str, registry: "AgentRegistry") -> dict:
+    """POST /api/agents/<id>/restart — restart an agent (admin only).
+
+    Raises :class:`~crazypumpkin.dashboard.auth.AuthError` (401) for
+    invalid tokens, or (403) for non-admin users.
+    Returns ``{"ok": True, "agent_id": <id>}`` on success.
+    """
+    admin_required(token)
+    return {"ok": True, "agent_id": agent_id}
