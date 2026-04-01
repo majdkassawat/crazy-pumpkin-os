@@ -1,4 +1,4 @@
-"""Tests for the 'cpos run-agent' CLI subcommand and QUICKSTART.md docs."""
+"""Tests for the 'cpos run' and 'cpos run-agent' CLI subcommands."""
 
 import argparse
 import sys
@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from crazypumpkin.cli import cmd_run_agent, main
+from crazypumpkin.cli import cmd_run, cmd_run_agent, main
 from crazypumpkin.framework.agent import BaseAgent
 from crazypumpkin.framework.models import Agent, AgentRole, Task, TaskOutput, deterministic_id
 
@@ -48,10 +48,11 @@ def _make_registry_with_agent(name="hello-agent"):
     return registry
 
 
-def _make_config():
+def _make_config(agents=None):
     cfg = MagicMock()
     cfg.company = {"name": "Test Co"}
     cfg.pipeline = {"cycle_interval": 30}
+    cfg.agents = agents if agents is not None else []
     return cfg
 
 
@@ -59,7 +60,6 @@ def _make_config():
 
 
 QUICKSTART_PATH = Path(__file__).resolve().parent.parent.parent / "crazy-pumpkin-os" / "docs" / "QUICKSTART.md"
-# Also try the docs path relative to the repo root
 QUICKSTART_ALT = Path(__file__).resolve().parent.parent / "docs" / "QUICKSTART.md"
 
 
@@ -116,7 +116,6 @@ class TestQuickstartDocs:
 
 
 MINIMAL_PIPELINE_README = Path(__file__).resolve().parent.parent / "examples" / "minimal-pipeline" / "README.md"
-# Also try from the parent repo
 MINIMAL_PIPELINE_README_ALT = (
     Path(__file__).resolve().parent.parent.parent
     / "crazy-pumpkin-os"
@@ -174,7 +173,6 @@ class TestMinimalPipelineReadme:
     def test_commands_are_copy_pasteable(self):
         """Commands appear inside fenced code blocks."""
         content = _read_minimal_pipeline_readme()
-        # Verify code blocks contain the run-agent commands
         in_code_block = False
         found_run_agent_in_block = False
         for line in content.splitlines():
@@ -317,7 +315,6 @@ class TestCmdRunAgent:
     def test_multiple_params_all_passed(self, capsys):
         """Multiple --param flags are all present in the context."""
         registry = _make_registry_with_agent("hello-agent")
-        # Patch the agent's run to capture context
         agent = registry.by_name("hello-agent")
         captured = {}
         original_run = agent.run
@@ -352,7 +349,6 @@ class TestCmdRunAgent:
         registry = _make_registry_with_agent("hello-agent")
         with patch("crazypumpkin.framework.config.load_config", return_value=_make_config()), \
              patch("crazypumpkin.framework.registry.default_registry", registry):
-            # Should complete without hitting timeout
             cmd_run_agent(_make_run_agent_args("hello-agent", timeout=60))
 
         out = capsys.readouterr().out
@@ -385,3 +381,160 @@ class TestDocMatchesImplementation:
         src = inspect.getsource(main)
         assert '"run-agent"' in src
         assert "cmd_run_agent" in src
+
+
+# ── 'cpos run <agent_name>' dispatch tests ───────────────────────────────
+
+
+class TestRunSubcommandWithAgentName:
+    """'cpos run <agent_name>' dispatches to cmd_run_agent."""
+
+    def test_run_with_agent_name_dispatches_to_cmd_run_agent(self, capsys):
+        """crazypumpkin run myagent resolves to cmd_run_agent with args.agent_name='myagent'."""
+        registry = _make_registry_with_agent("myagent")
+        with patch("crazypumpkin.framework.config.load_config", return_value=_make_config()), \
+             patch("crazypumpkin.framework.registry.default_registry", registry), \
+             patch("sys.argv", ["crazypumpkin", "run", "myagent"]):
+            main()
+
+        out = capsys.readouterr().out
+        assert "myagent" in out
+        assert "success" in out.lower()
+
+    def test_run_without_agent_name_dispatches_to_cmd_run(self):
+        """crazypumpkin run (no agent) still calls cmd_run for pipeline mode."""
+        with patch("crazypumpkin.cli.cmd_run") as mock_cmd_run, \
+             patch("sys.argv", ["crazypumpkin", "run"]):
+            mock_cmd_run.return_value = None
+            main()
+
+        mock_cmd_run.assert_called_once()
+        args = mock_cmd_run.call_args[0][0]
+        assert args.agent_name is None
+
+    def test_run_with_config_flag(self, capsys):
+        """--config flag is accepted on the run subcommand."""
+        registry = _make_registry_with_agent("myagent")
+        with patch("crazypumpkin.framework.config.load_config", return_value=_make_config()) as mock_load, \
+             patch("crazypumpkin.framework.registry.default_registry", registry), \
+             patch("sys.argv", ["crazypumpkin", "run", "myagent", "--config", "/tmp/c/config.yaml"]):
+            main()
+
+        mock_load.assert_called_once_with(project_root=Path("/tmp/c"))
+
+    def test_run_with_param_flag(self, capsys):
+        """--param flags are accepted on the run subcommand."""
+        registry = _make_registry_with_agent("hello-agent")
+        with patch("crazypumpkin.framework.config.load_config", return_value=_make_config()), \
+             patch("crazypumpkin.framework.registry.default_registry", registry), \
+             patch("sys.argv", ["crazypumpkin", "run", "hello-agent", "--param", "greeting=Hey"]):
+            main()
+
+        out = capsys.readouterr().out
+        assert "Hey" in out
+
+    def test_run_agent_backward_compat(self, capsys):
+        """run-agent subcommand still works as before."""
+        registry = _make_registry_with_agent("hello-agent")
+        with patch("crazypumpkin.framework.config.load_config", return_value=_make_config()), \
+             patch("crazypumpkin.framework.registry.default_registry", registry), \
+             patch("sys.argv", ["crazypumpkin", "run-agent", "hello-agent"]):
+            main()
+
+        out = capsys.readouterr().out
+        assert "hello-agent" in out
+        assert "success" in out.lower()
+
+    def test_run_parser_has_agent_name_argument(self):
+        """The run subparser accepts an optional agent_name positional argument."""
+        import inspect
+        src = inspect.getsource(main)
+        assert "'agent_name'" in src or '"agent_name"' in src
+        assert "nargs" in src
+
+
+# ── Error handling tests ──────────────────────────────────────────────────
+
+
+class TestCmdRunAgentErrorHandling:
+    """Tests for agent_name validation, unknown agent listing, and class load debug."""
+
+    def test_empty_agent_name_prints_error_and_exits_2(self, capsys):
+        """Empty agent_name prints error to stderr and exits with code 2."""
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_run_agent(_make_run_agent_args(agent_name=""))
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "Error: agent_name is required" in err
+
+    def test_blank_agent_name_prints_error_and_exits_2(self, capsys):
+        """Whitespace-only agent_name prints error to stderr and exits with code 2."""
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_run_agent(_make_run_agent_args(agent_name="   "))
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "Error: agent_name is required" in err
+
+    def test_unknown_agent_lists_available_agents(self, capsys):
+        """Unknown agent_name lists available agents from config on stderr."""
+        from crazypumpkin.framework.models import AgentDefinition
+        from crazypumpkin.framework.registry import AgentRegistry
+
+        agents = [
+            AgentDefinition(name="Strategist"),
+            AgentDefinition(name="Developer"),
+        ]
+        empty = AgentRegistry()
+        with patch("crazypumpkin.framework.config.load_config", return_value=_make_config(agents=agents)), \
+             patch("crazypumpkin.framework.registry.default_registry", empty):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_run_agent(_make_run_agent_args("nonexistent"))
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "Available agents: Strategist, Developer" in err
+
+    def test_class_load_failure_with_debug_prints_traceback(self, capsys):
+        """Class load failure with --param debug=true prints full traceback."""
+        from crazypumpkin.framework.models import AgentDefinition, AgentRole
+        from crazypumpkin.framework.registry import AgentRegistry
+
+        agents = [
+            AgentDefinition(
+                name="broken-agent",
+                role=AgentRole.EXECUTION,
+                class_path="nonexistent.module.BrokenAgent",
+            ),
+        ]
+        empty = AgentRegistry()
+        with patch("crazypumpkin.framework.config.load_config", return_value=_make_config(agents=agents)), \
+             patch("crazypumpkin.framework.registry.default_registry", empty):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_run_agent(_make_run_agent_args(
+                    "broken-agent", param=["debug=true"]
+                ))
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "Failed to load agent class" in err
+        assert "Traceback" in err
+
+    def test_class_load_failure_without_debug_no_traceback(self, capsys):
+        """Class load failure without debug=true does NOT print traceback."""
+        from crazypumpkin.framework.models import AgentDefinition, AgentRole
+        from crazypumpkin.framework.registry import AgentRegistry
+
+        agents = [
+            AgentDefinition(
+                name="broken-agent",
+                role=AgentRole.EXECUTION,
+                class_path="nonexistent.module.BrokenAgent",
+            ),
+        ]
+        empty = AgentRegistry()
+        with patch("crazypumpkin.framework.config.load_config", return_value=_make_config(agents=agents)), \
+             patch("crazypumpkin.framework.registry.default_registry", empty):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_run_agent(_make_run_agent_args("broken-agent"))
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "Failed to load agent class" in err
+        assert "Traceback" not in err
