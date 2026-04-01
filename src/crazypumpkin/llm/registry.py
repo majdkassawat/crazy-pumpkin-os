@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass, field
+
 from crazypumpkin.framework.models import AgentConfig, BudgetExceededError
 from crazypumpkin.framework.store import Store
 from crazypumpkin.llm.anthropic_api import AnthropicProvider
@@ -10,6 +13,55 @@ PROVIDER_CLASSES: dict[str, type[LLMProvider]] = {
     "anthropic_api": AnthropicProvider,
     "openai_api": OpenAIProvider,
 }
+
+
+class AllProvidersExhaustedError(Exception):
+    """Raised when every provider in a FallbackChain has been tried and failed."""
+
+
+@dataclass
+class RetryPolicy:
+    """Exponential-backoff retry configuration."""
+
+    max_retries: int = 3
+    base_delay: float = 1.0
+    max_delay: float = 30.0
+
+    def delay_for_attempt(self, attempt: int) -> float:
+        """Return the delay in seconds for the given *attempt* (0-indexed)."""
+        delay = self.base_delay * (2 ** attempt)
+        return min(delay, self.max_delay)
+
+
+class FallbackChain:
+    """Try a sequence of providers in order, with per-provider retries."""
+
+    def __init__(
+        self,
+        providers: list[LLMProvider],
+        retry_policy: RetryPolicy | None = None,
+    ) -> None:
+        self._providers = providers
+        self._retry_policy = retry_policy or RetryPolicy()
+
+    async def call(self, prompt: str, **kwargs: object) -> str:
+        """Attempt each provider in order. Retry each according to the policy.
+
+        Raises ``AllProvidersExhaustedError`` if every provider fails.
+        """
+        last_exc: Exception | None = None
+        for provider in self._providers:
+            for attempt in range(self._retry_policy.max_retries):
+                try:
+                    return provider.call(prompt, **kwargs)
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < self._retry_policy.max_retries - 1:
+                        delay = self._retry_policy.delay_for_attempt(attempt)
+                        await asyncio.sleep(delay)
+        raise AllProvidersExhaustedError(
+            f"All {len(self._providers)} providers exhausted"
+        ) from last_exc
 
 
 class ProviderRegistry:
@@ -106,7 +158,10 @@ class ProviderRegistry:
         self._check_budget(agent, agent_config)
         provider, agent_model = self.get_provider(agent)
         effective_model = model if model is not None else agent_model
-        return provider.call(prompt, model=effective_model, timeout=timeout, cwd=cwd, tools=tools, system=system)
+        call_kwargs: dict = dict(model=effective_model, timeout=timeout, cwd=cwd, tools=tools)
+        if system is not None:
+            call_kwargs["system"] = system
+        return provider.call(prompt, **call_kwargs)
 
     def call_multi_turn(
         self,

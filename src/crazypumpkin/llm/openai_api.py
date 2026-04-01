@@ -68,6 +68,18 @@ class OpenAIProvider(LLMProvider):
         message = response.choices[0].message
         return message.content or ""
 
+    def call_multi_turn(
+        self,
+        prompt: str,
+        *,
+        max_turns: int = 10,
+        tools: list | None = None,
+        timeout: float | None = None,
+        cwd: str | None = None,
+        system: str | None = None,
+    ) -> str:
+        return self.call(prompt, timeout=timeout, cwd=cwd, tools=tools, system=system)
+
     def call_json(self, prompt: str, **kwargs: object) -> dict | list:
         resolved = self._resolve_model(kwargs.pop("model", None))  # type: ignore[arg-type]
         response = self._client.chat.completions.create(

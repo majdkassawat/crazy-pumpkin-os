@@ -83,13 +83,13 @@ class BaseAgent(ABC):
         start = time.monotonic()
         try:
             result = self.execute(task, context)
-            duration = time.monotonic() - start
+            duration = max(time.monotonic() - start, 1e-9)
             logger.info("Agent execution completed", extra={"duration": duration})
             default_metrics.record_execution(
                 self.id, duration, tokens=context.get("token_usage"), error=False,
             )
         except Exception:
-            duration = time.monotonic() - start
+            duration = max(time.monotonic() - start, 1e-9)
             logger.error("Agent execution failed", extra={"duration": duration})
             default_metrics.record_execution(self.id, duration, error=True)
             raise
