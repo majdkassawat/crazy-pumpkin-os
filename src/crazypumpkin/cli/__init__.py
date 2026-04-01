@@ -610,10 +610,23 @@ def cmd_remove_plugin(args):
     """Uninstall a plugin package or remove a local plugin directory."""
     package = args.package
 
+    # Validate package name to prevent path traversal
+    if os.sep in package or "/" in package or "\\" in package or ".." in package:
+        print("Error: invalid plugin name", file=sys.stderr)
+        sys.exit(1)
+
     # Check for local plugin directory first
     plugins_dir = Path(__file__).resolve().parent / "plugins"
     local_plugin = plugins_dir / f"{package}.py"
     local_plugin_dir = plugins_dir / package
+
+    # Ensure resolved paths stay within the plugins directory
+    if not local_plugin.resolve().is_relative_to(plugins_dir.resolve()):
+        print("Error: invalid plugin name", file=sys.stderr)
+        sys.exit(1)
+    if not local_plugin_dir.resolve().is_relative_to(plugins_dir.resolve()):
+        print("Error: invalid plugin name", file=sys.stderr)
+        sys.exit(1)
 
     removed_local = False
     if local_plugin.is_file():
@@ -872,6 +885,20 @@ def cmd_cost(args):
 
 
 @friendly_errors
+def cmd_messages(args):
+    """Display messages from the framework message bus for a given topic."""
+    from crazypumpkin.framework import default_bus
+
+    topic = args.topic
+    messages = default_bus.get_messages(topic)
+    if not messages:
+        click.echo(f"No messages on topic '{topic}'.")
+        return
+    for msg in messages:
+        click.echo(f"[{msg.timestamp}] {msg.sender or '(anonymous)'}: {msg.content}")
+
+
+@friendly_errors
 def cmd_config_template(args):
     """Output a default configuration template in YAML or JSON format."""
     import json as _json
@@ -1008,6 +1035,12 @@ def main():
         help="Write template to a file instead of stdout",
     )
 
+    messages_parser = sub.add_parser("messages", help="Show messages on a topic")
+    messages_parser.add_argument(
+        "--topic", type=str, required=True,
+        help="Topic to display messages for",
+    )
+
     sessions_parser = sub.add_parser("sessions", help="List all sessions")
     sessions_parser.add_argument(
         "--agent", type=str, default=None,
@@ -1044,6 +1077,7 @@ def main():
         "session-start": cmd_session_start,
         "cost": cmd_cost,
         "config-template": cmd_config_template,
+        "messages": cmd_messages,
     }
 
     if args.command == "schedule":

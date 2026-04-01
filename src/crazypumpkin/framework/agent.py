@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from crazypumpkin.framework.logging import AgentLogContext, configure_agent_logging
+from crazypumpkin.framework.message_bus import MessageBus
 from crazypumpkin.framework.metrics import default_metrics
 from crazypumpkin.framework.models import Agent, AgentRole, Task, TaskOutput
 
@@ -22,8 +23,18 @@ if TYPE_CHECKING:
 class BaseAgent(ABC):
     """Abstract base for all agents."""
 
-    def __init__(self, agent: Agent):
+    def __init__(self, agent: Agent, bus: MessageBus | None = None):
         self.agent = agent
+        self._bus = bus
+
+    @property
+    def bus(self) -> MessageBus | None:
+        """The shared message bus for inter-agent communication."""
+        return self._bus
+
+    @bus.setter
+    def bus(self, value: MessageBus | None) -> None:
+        self._bus = value
 
     @property
     def id(self) -> str:
@@ -119,8 +130,9 @@ class ClaudeSDKAgent(BaseAgent):
         agent: Agent,
         tool_permissions: dict[str, bool] | None = None,
         system_prompt: str | None = None,
+        bus: MessageBus | None = None,
     ) -> None:
-        super().__init__(agent)
+        super().__init__(agent, bus=bus)
         self.tool_permissions: dict[str, bool] = tool_permissions or {
             "read": True,
             "write": False,
