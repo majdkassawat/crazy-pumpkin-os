@@ -158,6 +158,7 @@ if __name__ == "__main__":
 
 ## Next Steps
 
+- **[Configuration Tutorial](TUTORIAL_CONFIG.md)** — Step-by-step guide to config validation and environment variable overrides.
 - See [PLUGIN_GUIDE.md](../PLUGIN_GUIDE.md) for packaging agents as plugins
 - See [GETTING_STARTED.md](../GETTING_STARTED.md) for full project setup
 - See [API_DOCS.md](../API_DOCS.md) for detailed API documentation
