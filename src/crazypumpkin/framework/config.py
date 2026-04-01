@@ -185,6 +185,7 @@ def _validate_and_build(raw: dict, project_root: Path) -> Config:
             trigger=a.get("trigger", ""),
             cooldown_seconds=int(a.get("cooldown_seconds", 0)),
             class_path=a.get("class", ""),
+            cron=a.get("cron", ""),
         ))
 
     # notifications — validate slack sub-section if present
@@ -327,3 +328,61 @@ def load_config(project_root: Path | None = None) -> Config:
 
     raw = _expand_vars(config)
     return _validate_and_build(raw, project_root)
+
+
+def save_config(config: Config, project_root: Path | None = None) -> None:
+    """Serialize *config* back to config.yaml in *project_root*.
+
+    Writes the configuration as YAML, preserving the structure expected by
+    :func:`load_config`.
+    """
+    if project_root is None:
+        project_root = get_project_root()
+    project_root = Path(project_root)
+
+    agents_raw = []
+    for a in config.agents:
+        entry: dict[str, Any] = {
+            "name": a.name,
+            "role": a.role.value if isinstance(a.role, AgentRole) else a.role,
+        }
+        if a.description:
+            entry["description"] = a.description
+        if a.model:
+            entry["model"] = a.model
+        if a.group:
+            entry["group"] = a.group
+        if a.trigger:
+            entry["trigger"] = a.trigger
+        if a.class_path:
+            entry["class"] = a.class_path
+        if a.cron:
+            entry["cron"] = a.cron
+        agents_raw.append(entry)
+
+    products_raw = []
+    for p in config.products:
+        products_raw.append({
+            "name": p.name,
+            "workspace": p.workspace,
+            "source_dir": p.source_dir,
+            "test_dir": p.test_dir,
+            "test_command": p.test_command,
+            "git_branch": p.git_branch,
+            "auto_pm": p.auto_pm,
+        })
+
+    raw: dict[str, Any] = {
+        "company": config.company,
+        "products": products_raw,
+        "llm": config.llm,
+        "agents": agents_raw,
+        "pipeline": config.pipeline,
+        "notifications": config.notifications,
+        "dashboard": config.dashboard,
+        "voice": config.voice,
+    }
+
+    yaml_path = project_root / "config.yaml"
+    with open(yaml_path, "w", encoding="utf-8") as f:
+        yaml.dump(raw, f, default_flow_style=False, sort_keys=False)

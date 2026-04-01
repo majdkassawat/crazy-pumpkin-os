@@ -88,6 +88,7 @@ class AgentDefinition:
     trigger: str = ""
     cooldown_seconds: int = 0
     class_path: str = ""
+    cron: str = ""
 
 
 class AgentStatus(str, Enum):
