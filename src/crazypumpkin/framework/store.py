@@ -46,6 +46,7 @@ class Store:
         self.proposals: dict[str, ChangeProposal] = {}
         self._agent_metrics: dict[str, AgentMetrics] = {}
         self._run_history: dict[str, RunRecord] = {}
+        self._jobs: dict = {}
         self._data_dir = data_dir
         if data_dir:
             data_dir.mkdir(parents=True, exist_ok=True)
@@ -593,6 +594,25 @@ class Store:
             )
 
         return True
+
+    # ── Scheduler Jobs ──
+
+    def save_job(self, job) -> None:
+        self._jobs[job.job_id] = job
+
+    def get_job(self, job_id: str):
+        return self._jobs.get(job_id)
+
+    def list_jobs(self, *, status=None) -> list:
+        jobs = list(self._jobs.values())
+        if status is not None:
+            jobs = [j for j in jobs if j.status == status]
+        return jobs
+
+    def update_job(self, job) -> None:
+        from crazypumpkin.framework.models import _now
+        job.updated_at = _now()
+        self._jobs[job.job_id] = job
 
     # ── Run History ──
 

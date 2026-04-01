@@ -370,6 +370,30 @@ class PluginManifest:
     requires: list[str] = field(default_factory=list)
 
 
+# ── Scheduler Jobs ───────────────────────────────────────────────────
+
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    DEAD_LETTER = "dead_letter"
+
+
+@dataclass
+class PersistedJob:
+    """A scheduler job with retry tracking."""
+    job_id: str = field(default_factory=_uid)
+    name: str = ""
+    status: JobStatus = JobStatus.PENDING
+    attempt: int = 0
+    max_retries: int = 3
+    payload: dict[str, Any] = field(default_factory=dict)
+    error: str = ""
+    created_at: str = field(default_factory=_now)
+    updated_at: str = field(default_factory=_now)
+
+
 # ── Run History ──────────────────────────────────────────────────────
 
 @dataclass

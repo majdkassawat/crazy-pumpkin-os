@@ -846,6 +846,59 @@ def cli_run(agent_name, config_path, param, timeout):
         sys.exit(1)
 
 
+@cli.command("jobs")
+@click.option("--status", default=None, help="Filter by status")
+@click.pass_obj
+def cli_jobs(store, status):
+    """List scheduler jobs."""
+    from crazypumpkin.framework.models import JobStatus
+    from crazypumpkin.framework.store import Store as _Store
+
+    if store is None:
+        store = _Store()
+
+    status_filter = None
+    if status is not None:
+        try:
+            status_filter = JobStatus(status.lower())
+        except ValueError:
+            click.echo(f"Unknown status: {status}", err=True)
+            sys.exit(1)
+
+    jobs = store.list_jobs(status=status_filter)
+    if not jobs:
+        click.echo("No jobs found.")
+        return
+    for job in jobs:
+        click.echo(f"{job.job_id}  {job.name}  {job.status.value}  attempt={job.attempt}/{job.max_retries}")
+
+
+@cli.command("retry-job")
+@click.argument("job_id")
+@click.pass_obj
+def cli_retry_job(store, job_id):
+    """Re-queue a failed job."""
+    from crazypumpkin.framework.models import JobStatus
+    from crazypumpkin.framework.store import Store as _Store
+
+    if store is None:
+        store = _Store()
+
+    job = store.get_job(job_id)
+    if job is None:
+        click.echo(f"Job '{job_id}' not found.", err=True)
+        sys.exit(1)
+
+    retryable = {JobStatus.FAILED, JobStatus.DEAD_LETTER}
+    if job.status not in retryable:
+        click.echo(f"Job '{job_id}' is not retryable (status={job.status.value}).", err=True)
+        sys.exit(1)
+
+    job.status = JobStatus.PENDING
+    store.update_job(job)
+    click.echo(f"Job '{job_id}' queued for retry.")
+
+
 @friendly_errors
 def cmd_cost(args):
     """Display LLM cost tracking summary."""
