@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 from openai import OpenAI
 
@@ -51,11 +52,18 @@ def _anthropic_tool_to_openai(tool: dict) -> dict:
 class OpenAIProvider(LLMProvider):
     """LLM provider backed by the OpenAI chat completions API."""
 
-    def __init__(self, config: dict | None = None) -> None:
+    def __init__(self, config: dict | None = None, *, cache_enabled: bool = True) -> None:
         config = config or {}
         api_key = config.get("api_key") or os.environ.get("OPENAI_API_KEY")
         self._client = OpenAI(api_key=api_key)
         self._default_model = config.get("model", DEFAULT_MODEL)
+        self.cache_enabled = cache_enabled
+
+    def _apply_cache_hints(self, messages: list[dict]) -> list[dict]:
+        """Move system messages to the front for optimal prefix caching."""
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        other_msgs = [m for m in messages if m.get("role") != "system"]
+        return system_msgs + other_msgs
 
     def _resolve_model(self, model: str | None) -> str:
         name = model or self._default_model
@@ -74,10 +82,19 @@ class OpenAIProvider(LLMProvider):
         agent: str | None = None,
     ) -> str:
         resolved = self._resolve_model(model)
+        messages: list[dict] = []
+        if system is not None:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        use_cache = cache and self.cache_enabled
+        if use_cache:
+            messages = self._apply_cache_hints(messages)
         kwargs: dict = {
             "model": resolved,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
         }
+        if use_cache:
+            kwargs["store"] = True
         if timeout is not None:
             kwargs["timeout"] = timeout
         if tools:
@@ -97,10 +114,19 @@ class OpenAIProvider(LLMProvider):
     ) -> tuple[str, CallCost]:
         """Like call() but also returns a CallCost with token/cost info."""
         resolved = self._resolve_model(model)
+        messages: list[dict] = []
+        if system is not None:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        use_cache = cache and self.cache_enabled
+        if use_cache:
+            messages = self._apply_cache_hints(messages)
         kwargs: dict = {
             "model": resolved,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
         }
+        if use_cache:
+            kwargs["store"] = True
         if timeout is not None:
             kwargs["timeout"] = timeout
         response = self._client.chat.completions.create(**kwargs)
@@ -136,11 +162,23 @@ class OpenAIProvider(LLMProvider):
 
     def call_json(self, prompt: str, **kwargs: object) -> dict | list:
         resolved = self._resolve_model(kwargs.pop("model", None))  # type: ignore[arg-type]
+        system = kwargs.pop("system", None)
+        cache = kwargs.pop("cache", True)
         kwargs.pop("agent", None)
-        response = self._client.chat.completions.create(
-            model=resolved,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-        )
+        messages: list[dict] = []
+        if system is not None:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        use_cache = bool(cache) and self.cache_enabled
+        if use_cache:
+            messages = self._apply_cache_hints(messages)
+        create_kwargs: dict = {
+            "model": resolved,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+        }
+        if use_cache:
+            create_kwargs["store"] = True
+        response = self._client.chat.completions.create(**create_kwargs)
         text = response.choices[0].message.content or "{}"
         return json.loads(text)
