@@ -382,3 +382,47 @@ class RunRecord:
     status: str = "pending"  # "pending", "success", "failure"
     duration_ms: float | None = None
     error: str | None = None
+
+
+# ── Session Message ─────────────────────────────────────────────────
+
+@dataclass
+class SessionMessage:
+    """A single message within an agent session."""
+    role: str = ""
+    content: str = ""
+    timestamp: str = field(default_factory=_now)
+
+
+# ── Agent Session ───────────────────────────────────────────────────
+
+@dataclass
+class AgentSession:
+    """A multi-turn conversation session with an agent."""
+    session_id: str = field(default_factory=_uid)
+    agent_name: str = ""
+    status: str = "active"  # "active", "expired", "closed"
+    messages: list[SessionMessage] = field(default_factory=list)
+    max_turns: int = 50
+    created_at: str = field(default_factory=_now)
+    updated_at: str = field(default_factory=_now)
+
+    def add_message(self, role: str, content: str) -> None:
+        """Append a message; raises if session is expired or max_turns reached."""
+        if self.status == "expired":
+            raise ValueError("Cannot add message to expired session")
+        if len(self.messages) >= self.max_turns:
+            raise ValueError(
+                f"Cannot add message: max_turns ({self.max_turns}) reached"
+            )
+        self.messages.append(SessionMessage(role=role, content=content))
+        self.updated_at = _now()
+
+    def expire(self) -> None:
+        """Mark the session as expired."""
+        self.status = "expired"
+        self.updated_at = _now()
+
+
+# Alias kept for backward compatibility with existing CLI imports.
+Session = AgentSession

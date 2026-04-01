@@ -17,6 +17,12 @@ from crazypumpkin.notifications import notify as _notify
 
 logger = logging.getLogger("crazypumpkin.events")
 
+# Session lifecycle event types
+SESSION_STARTED = "session.started"
+SESSION_RESUMED = "session.resumed"
+SESSION_MESSAGE_ADDED = "session.message_added"
+SESSION_ENDED = "session.ended"
+
 EventHandler = Callable[[AuditEvent], None]
 
 

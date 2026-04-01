@@ -563,19 +563,84 @@ def cmd_run_agent(args):
 
 @friendly_errors
 def cmd_sessions(args):
-    """List all sessions, optionally filtered by agent."""
-    from crazypumpkin.framework.models import Session
+    """List all sessions, optionally filtered by agent and status."""
+    from crazypumpkin.framework.models import AgentSession
     from crazypumpkin.framework.store import Store
 
     store = Store()
     agent_filter = getattr(args, "agent", None)
-    sessions = store.list_sessions(agent_name=agent_filter)
+    status_filter = getattr(args, "status", "active")
+    sessions = store.list_sessions(agent_name=agent_filter, status=status_filter)
 
-    header = f"{'session_id':<34} {'agent':<20} {'messages':<10} {'updated'}"
+    if not sessions:
+        print("No sessions found.")
+        return
+
+    header = f"{'session_id':<14} {'agent_name':<20} {'status':<10} {'message_count':<15} {'updated_at'}"
     print(header)
     print("-" * len(header))
     for s in sessions:
-        print(f"{s.session_id:<34} {s.agent_name:<20} {len(s.messages):<10} {s.updated_at}")
+        print(
+            f"{s.session_id:<14} {s.agent_name:<20} {s.status:<10} "
+            f"{len(s.messages):<15} {s.updated_at}"
+        )
+
+
+@friendly_errors
+def cmd_session_show(args):
+    """Show session details and recent messages."""
+    from crazypumpkin.framework.models import AgentSession
+    from crazypumpkin.framework.store import Store
+
+    session_id = args.session_id
+    store = Store()
+    session = store.get_session(session_id)
+
+    if session is None:
+        print(f"Session '{session_id}' not found.")
+        return
+
+    print(f"Session:  {session.session_id}")
+    print(f"Agent:    {session.agent_name}")
+    print(f"Status:   {session.status}")
+    print(f"Messages: {len(session.messages)}")
+    print(f"Created:  {session.created_at}")
+    print(f"Updated:  {session.updated_at}")
+
+    recent = session.messages[-10:]
+    if recent:
+        print("\n--- Recent Messages ---")
+        for msg in recent:
+            role = msg.role if hasattr(msg, "role") else msg.get("role", "unknown")
+            content = msg.content if hasattr(msg, "content") else msg.get("content", "")
+            print(f"[{role}] {content}")
+    else:
+        print("\nNo messages in this session.")
+
+
+@friendly_errors
+def cmd_session_delete(args):
+    """Delete a session."""
+    from crazypumpkin.framework.models import AgentSession
+    from crazypumpkin.framework.store import Store
+
+    session_id = args.session_id
+    force = getattr(args, "force", False)
+    store = Store()
+
+    session = store.get_session(session_id)
+    if session is None:
+        print(f"Session '{session_id}' not found.")
+        return
+
+    if not force:
+        confirm = input(f"Delete session {session_id}? [y/N] ").strip().lower()
+        if confirm != "y":
+            print("Aborted.")
+            return
+
+    store.delete_session(session_id)
+    print(f"Session {session_id} deleted.")
 
 
 @friendly_errors
@@ -1013,12 +1078,34 @@ def main():
         "--agent", type=str, default=None,
         help="Filter by agent name",
     )
+    sessions_parser.add_argument(
+        "--status", type=str, default="active",
+        help="Filter by session status (default: active)",
+    )
 
     session_start_parser = sub.add_parser(
         "session-start", help="Start a new interactive session with an agent",
     )
     session_start_parser.add_argument(
         "agent_name", help="Name of the agent to start a session with",
+    )
+
+    session_show_parser = sub.add_parser(
+        "session-show", help="Show session details and recent messages",
+    )
+    session_show_parser.add_argument(
+        "session_id", help="Session ID to show",
+    )
+
+    session_delete_parser = sub.add_parser(
+        "session-delete", help="Delete a session",
+    )
+    session_delete_parser.add_argument(
+        "session_id", help="Session ID to delete",
+    )
+    session_delete_parser.add_argument(
+        "--force", action="store_true", default=False,
+        help="Delete without confirmation prompt",
     )
 
     args = parser.parse_args()
@@ -1042,6 +1129,8 @@ def main():
         "run-agent": cmd_run_agent,
         "sessions": cmd_sessions,
         "session-start": cmd_session_start,
+        "session-show": cmd_session_show,
+        "session-delete": cmd_session_delete,
         "cost": cmd_cost,
         "config-template": cmd_config_template,
     }

@@ -13,17 +13,26 @@ from typing import TYPE_CHECKING, Any
 
 from crazypumpkin.framework.logging import AgentLogContext, configure_agent_logging
 from crazypumpkin.framework.metrics import default_metrics
-from crazypumpkin.framework.models import Agent, AgentRole, Task, TaskOutput
+from crazypumpkin.framework.models import Agent, AgentRole, AgentSession, SessionMessage, Task, TaskOutput
 
 if TYPE_CHECKING:
+    from crazypumpkin.framework.events import EventBus
     from crazypumpkin.framework.orchestrator import Orchestrator
+    from crazypumpkin.framework.store import Store
 
 
 class BaseAgent(ABC):
     """Abstract base for all agents."""
 
-    def __init__(self, agent: Agent):
+    def __init__(
+        self,
+        agent: Agent,
+        event_bus: EventBus | None = None,
+        store: Store | None = None,
+    ):
         self.agent = agent
+        self.event_bus = event_bus
+        self.store = store
 
     @property
     def id(self) -> str:
@@ -100,6 +109,94 @@ class BaseAgent(ABC):
     def can_handle(self, task: Task) -> bool:
         """Whether this agent can handle the given task. Override for custom logic."""
         return True
+
+    # ── Session lifecycle ──
+
+    def start_session(self) -> AgentSession:
+        """Start a new session and emit SESSION_STARTED."""
+        from crazypumpkin.framework.events import SESSION_STARTED
+
+        if self.store is None:
+            raise RuntimeError("Store is required for session management")
+        session = self.store.create_session(self.name)
+        if self.event_bus is not None:
+            self.event_bus.emit(
+                agent_id=self.id,
+                action=SESSION_STARTED,
+                entity_type="session",
+                entity_id=session.session_id,
+                metadata={"session_id": session.session_id, "agent_name": self.name},
+            )
+        return session
+
+    def resume_session(self, session_id: str) -> AgentSession:
+        """Resume an existing session and emit SESSION_RESUMED."""
+        from crazypumpkin.framework.events import SESSION_RESUMED
+
+        if self.store is None:
+            raise RuntimeError("Store is required for session management")
+        session = self.store.get_session(session_id)
+        if session is None:
+            raise KeyError(f"Session {session_id} not found")
+        if self.event_bus is not None:
+            self.event_bus.emit(
+                agent_id=self.id,
+                action=SESSION_RESUMED,
+                entity_type="session",
+                entity_id=session.session_id,
+                metadata={
+                    "session_id": session.session_id,
+                    "agent_name": self.name,
+                    "message_count": len(session.messages),
+                },
+            )
+        return session
+
+    def add_message(self, session_id: str, role: str, content: str) -> None:
+        """Add a message to a session and emit SESSION_MESSAGE_ADDED."""
+        from crazypumpkin.framework.events import SESSION_MESSAGE_ADDED
+
+        if self.store is None:
+            raise RuntimeError("Store is required for session management")
+        self.store.append_message(session_id, role, content)
+        if self.event_bus is not None:
+            self.event_bus.emit(
+                agent_id=self.id,
+                action=SESSION_MESSAGE_ADDED,
+                entity_type="session",
+                entity_id=session_id,
+                metadata={"session_id": session_id, "role": role},
+            )
+
+    def get_session_context(
+        self, session_id: str, max_messages: int = 50
+    ) -> list[dict[str, str]]:
+        """Return the most recent messages from a session, truncated to *max_messages*."""
+        if self.store is None:
+            raise RuntimeError("Store is required for session management")
+        session = self.store.get_session(session_id)
+        if session is None:
+            raise KeyError(f"Session {session_id} not found")
+        return session.messages[-max_messages:]
+
+    def end_session(self, session_id: str, status: str = "closed") -> None:
+        """End a session and emit SESSION_ENDED."""
+        from crazypumpkin.framework.events import SESSION_ENDED
+
+        if self.store is None:
+            raise RuntimeError("Store is required for session management")
+        session = self.store.get_session(session_id)
+        if session is None:
+            raise KeyError(f"Session {session_id} not found")
+        session.status = status
+        if self.event_bus is not None:
+            self.event_bus.emit(
+                agent_id=self.id,
+                action=SESSION_ENDED,
+                entity_type="session",
+                entity_id=session_id,
+                metadata={"session_id": session_id, "status": status},
+            )
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} {self.name} ({self.role.value})>"

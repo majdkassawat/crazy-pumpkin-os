@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from crazypumpkin.framework.models import (
-    Agent, AgentConfig, AgentMetrics, Approval, ApprovalStatus, ChangeProposal,
-    Project, ProjectStatus, ProposalStatus, ProposalType, Review,
-    ReviewDecision, RunRecord, Task, TaskOutput, TaskStatus,
+    Agent, AgentConfig, AgentMetrics, AgentSession, Approval, ApprovalStatus,
+    ChangeProposal, Project, ProjectStatus, ProposalStatus, ProposalType,
+    Review, ReviewDecision, RunRecord, Task, TaskOutput, TaskStatus,
 )
 
 
@@ -38,6 +38,8 @@ logger = logging.getLogger("crazypumpkin.store")
 class Store:
     """In-memory store for all framework entities."""
 
+    MAX_SESSIONS = 10_000  # Cap to prevent unbounded memory growth
+
     def __init__(self, data_dir: Path | None = None):
         self.projects: dict[str, Project] = {}
         self.tasks: dict[str, Task] = {}
@@ -46,6 +48,7 @@ class Store:
         self.proposals: dict[str, ChangeProposal] = {}
         self._agent_metrics: dict[str, AgentMetrics] = {}
         self._run_history: dict[str, RunRecord] = {}
+        self._sessions: dict[str, AgentSession] = {}
         self._data_dir = data_dir
         if data_dir:
             data_dir.mkdir(parents=True, exist_ok=True)
@@ -593,6 +596,126 @@ class Store:
             )
 
         return True
+
+    # ── Sessions ──
+
+    def create_session(self, agent_name: str) -> AgentSession:
+        """Create and store a new agent session.
+
+        Evicts the oldest closed/expired session when the cap is reached.
+        Raises RuntimeError if the cap is reached and no evictable session exists.
+        """
+        from crazypumpkin.framework.models import _now, _uid
+
+        if len(self._sessions) >= self.MAX_SESSIONS:
+            # Evict oldest non-active session
+            evict_id = None
+            oldest_ts = None
+            for sid, s in self._sessions.items():
+                if s.status != "active":
+                    if oldest_ts is None or s.updated_at < oldest_ts:
+                        oldest_ts = s.updated_at
+                        evict_id = sid
+            if evict_id is not None:
+                del self._sessions[evict_id]
+            else:
+                raise RuntimeError(
+                    f"Session limit ({self.MAX_SESSIONS}) reached with no evictable sessions"
+                )
+        session = AgentSession(session_id=_uid(), agent_name=agent_name)
+        self._sessions[session.session_id] = session
+        return session
+
+    def get_session(self, session_id: str) -> AgentSession | None:
+        return self._sessions.get(session_id)
+
+    def list_sessions(
+        self,
+        *,
+        agent_name: str | None = None,
+        status: str | None = None,
+    ) -> list[AgentSession]:
+        sessions = list(self._sessions.values())
+        if agent_name is not None:
+            sessions = [s for s in sessions if s.agent_name == agent_name]
+        if status is not None:
+            sessions = [s for s in sessions if s.status == status]
+        sessions.sort(key=lambda s: s.updated_at, reverse=True)
+        return sessions
+
+    def append_message(self, session_id: str, role: str, content: str) -> None:
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise KeyError(f"Session {session_id} not found")
+        from crazypumpkin.framework.models import SessionMessage, _now
+        session.messages.append(SessionMessage(role=role, content=content))
+        session.updated_at = _now()
+
+    def get_or_create_session(self, agent_name: str, max_turns: int = 50) -> AgentSession:
+        """Return the most recent active session for agent_name, or create a new one."""
+        existing = self.list_sessions(agent_name=agent_name, status="active")
+        if existing:
+            existing.sort(key=lambda s: s.updated_at, reverse=True)
+            return existing[0]
+        return self.create_session(agent_name)
+
+    def save_session(self, session: AgentSession) -> None:
+        """Persist a session in the store (and to disk if data_dir is set)."""
+        self._sessions[session.session_id] = session
+        if self._data_dir:
+            from crazypumpkin.framework.models import SessionMessage
+            path = self._data_dir / "sessions" / f"{session.session_id}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "session_id": session.session_id,
+                "agent_name": session.agent_name,
+                "status": session.status,
+                "max_turns": session.max_turns,
+                "messages": [
+                    {"role": m.role, "content": m.content, "timestamp": m.timestamp}
+                    for m in session.messages
+                ],
+                "created_at": session.created_at,
+                "updated_at": session.updated_at,
+            }
+            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def load_session(self, session_id: str) -> AgentSession | None:
+        """Load a session by ID from memory or disk."""
+        session = self._sessions.get(session_id)
+        if session is not None:
+            return session
+        if self._data_dir:
+            from crazypumpkin.framework.models import SessionMessage
+            path = self._data_dir / "sessions" / f"{session_id}.json"
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                session = AgentSession(
+                    session_id=data["session_id"],
+                    agent_name=data["agent_name"],
+                    status=data.get("status", "active"),
+                    max_turns=data.get("max_turns", 50),
+                    messages=[
+                        SessionMessage(
+                            role=m["role"],
+                            content=m["content"],
+                            timestamp=m.get("timestamp", ""),
+                        )
+                        for m in data.get("messages", [])
+                    ],
+                    created_at=data.get("created_at", ""),
+                    updated_at=data.get("updated_at", ""),
+                )
+                self._sessions[session_id] = session
+                return session
+        return None
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session by ID. Returns True if deleted, False if not found."""
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+            return True
+        return False
 
     # ── Run History ──
 
