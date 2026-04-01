@@ -397,3 +397,12 @@ class PluginManifest:
     min_framework_version: str = ""
     permissions: list[str] = field(default_factory=list)
     requires: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MetricDataPoint:
+    """A single metric observation."""
+    agent_id: str = ""
+    name: str = ""
+    value: float = 0.0
+    timestamp: str = field(default_factory=_now)

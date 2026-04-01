@@ -15,8 +15,9 @@ from typing import Any
 
 from crazypumpkin.framework.models import (
     Agent, AgentConfig, AgentMetrics, AgentRun, Approval, ApprovalStatus,
-    ChangeProposal, Project, ProjectStatus, ProposalStatus, ProposalType,
-    Review, ReviewDecision, RunStatus, Task, TaskOutput, TaskResult, TaskStatus,
+    AuditEvent, ChangeProposal, MetricDataPoint, Project, ProjectStatus,
+    ProposalStatus, ProposalType, Review, ReviewDecision, RunStatus, Task,
+    TaskOutput, TaskResult, TaskStatus,
 )
 
 
@@ -48,6 +49,8 @@ class Store:
         self._agent_metrics: dict[str, AgentMetrics] = {}
         self._runs: dict[str, AgentRun] = {}
         self._task_results: dict[str, TaskResult] = {}  # keyed by task_id
+        self._events: list[AuditEvent] = []
+        self._metric_points: list[MetricDataPoint] = []
         self._data_dir = data_dir
         if data_dir:
             data_dir.mkdir(parents=True, exist_ok=True)
@@ -137,6 +140,52 @@ class Store:
 
     def get_task_result(self, task_id: str) -> TaskResult | None:
         return self._task_results.get(task_id)
+
+    # ── Events ──
+
+    def log_event(self, event: AuditEvent) -> None:
+        self._events.append(event)
+
+    def get_events(self) -> list[AuditEvent]:
+        return list(self._events)
+
+    def query_events(
+        self,
+        agent_id: str | None = None,
+        event_type: str | None = None,
+    ) -> list[AuditEvent]:
+        results = self._events
+        if agent_id is not None:
+            results = [e for e in results if e.agent_id == agent_id]
+        if event_type is not None:
+            results = [e for e in results if e.entity_type == event_type]
+        return results
+
+    # ── Run Queries ──
+
+    def query_runs(
+        self,
+        agent_name: str | None = None,
+        status: RunStatus | None = None,
+    ) -> list[AgentRun]:
+        results = list(self._runs.values())
+        if agent_name is not None:
+            results = [r for r in results if r.agent_name == agent_name]
+        if status is not None:
+            results = [r for r in results if r.status == status]
+        return results
+
+    # ── Metric Data Points ──
+
+    def store_metric(self, agent_id: str, name: str, value: float) -> None:
+        self._metric_points.append(
+            MetricDataPoint(agent_id=agent_id, name=name, value=value)
+        )
+
+    def get_metrics(self, agent_id: str | None = None) -> list[MetricDataPoint]:
+        if agent_id is None:
+            return list(self._metric_points)
+        return [m for m in self._metric_points if m.agent_id == agent_id]
 
     # ── Agent Metrics ──
 

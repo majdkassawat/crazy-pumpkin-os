@@ -1,4 +1,4 @@
-"""Tests for crazypumpkin.framework.store — read, write, compaction."""
+"""Comprehensive tests for crazypumpkin.framework.store — the persistence layer for agents, runs, tasks, and events."""
 
 import importlib
 import json
@@ -18,6 +18,8 @@ _agent_mod = importlib.import_module("crazypumpkin.framework.agent")
 
 Agent = _models.Agent
 AgentRun = _models.AgentRun
+AuditEvent = _models.AuditEvent
+MetricDataPoint = _models.MetricDataPoint
 RunStatus = _models.RunStatus
 TaskResult = _models.TaskResult
 AgentConfig = _models.AgentConfig
@@ -770,3 +772,227 @@ class TestRunTracking:
 
     def test_get_run_not_found(self, store):
         assert store.get_run("nonexistent") is None
+
+
+# ── Event Logging & Query ───────────────────────────────────────
+
+
+def test_store_event(store):
+    event = AuditEvent(
+        agent_id="agent-1",
+        action="task.complete",
+        entity_type="task",
+        entity_id="t1",
+        detail="completed task t1",
+    )
+    store.log_event(event)
+    events = store.get_events()
+    assert len(events) == 1
+    assert events[0] is event
+    assert events[0].agent_id == "agent-1"
+    assert events[0].action == "task.complete"
+    assert events[0].entity_type == "task"
+
+
+def test_query_events_by_agent(store):
+    store.log_event(AuditEvent(agent_id="alpha", action="build", entity_type="task"))
+    store.log_event(AuditEvent(agent_id="beta", action="review", entity_type="task"))
+    store.log_event(AuditEvent(agent_id="alpha", action="deploy", entity_type="project"))
+
+    alpha_events = store.query_events(agent_id="alpha")
+    assert len(alpha_events) == 2
+    assert all(e.agent_id == "alpha" for e in alpha_events)
+
+    beta_events = store.query_events(agent_id="beta")
+    assert len(beta_events) == 1
+    assert beta_events[0].agent_id == "beta"
+
+    none_events = store.query_events(agent_id="gamma")
+    assert len(none_events) == 0
+
+
+def test_query_events_by_type(store):
+    store.log_event(AuditEvent(agent_id="a1", entity_type="task", action="create"))
+    store.log_event(AuditEvent(agent_id="a1", entity_type="project", action="create"))
+    store.log_event(AuditEvent(agent_id="a2", entity_type="task", action="update"))
+
+    task_events = store.query_events(event_type="task")
+    assert len(task_events) == 2
+    assert all(e.entity_type == "task" for e in task_events)
+
+    project_events = store.query_events(event_type="project")
+    assert len(project_events) == 1
+    assert project_events[0].entity_type == "project"
+
+    policy_events = store.query_events(event_type="policy")
+    assert len(policy_events) == 0
+
+
+def test_query_runs_with_filters(store):
+    store.start_run("agent-a", "r1")
+    store.start_run("agent-b", "r2")
+    store.start_run("agent-a", "r3")
+    store.complete_run("r1")
+    store.fail_run("r2", error="boom")
+
+    # Filter by status — completed
+    completed = store.query_runs(status=RunStatus.COMPLETED)
+    assert len(completed) == 1
+    assert completed[0].run_id == "r1"
+
+    # Filter by status — running
+    running = store.query_runs(status=RunStatus.RUNNING)
+    assert len(running) == 1
+    assert running[0].run_id == "r3"
+
+    # Filter by status — failed
+    failed = store.query_runs(status=RunStatus.FAILED)
+    assert len(failed) == 1
+    assert failed[0].run_id == "r2"
+
+    # Filter by agent_name + status
+    agent_a_completed = store.query_runs(agent_name="agent-a", status=RunStatus.COMPLETED)
+    assert len(agent_a_completed) == 1
+    assert agent_a_completed[0].run_id == "r1"
+
+
+def test_store_metrics(store):
+    store.store_metric("agent-1", "latency_ms", 120.5)
+    store.store_metric("agent-1", "latency_ms", 98.3)
+    store.store_metric("agent-2", "throughput", 42.0)
+
+    all_metrics = store.get_metrics()
+    assert len(all_metrics) == 3
+
+    a1_metrics = store.get_metrics(agent_id="agent-1")
+    assert len(a1_metrics) == 2
+    assert all(m.agent_id == "agent-1" for m in a1_metrics)
+    assert a1_metrics[0].name == "latency_ms"
+    assert a1_metrics[0].value == 120.5
+    assert a1_metrics[1].value == 98.3
+
+    a2_metrics = store.get_metrics(agent_id="agent-2")
+    assert len(a2_metrics) == 1
+    assert a2_metrics[0].name == "throughput"
+    assert a2_metrics[0].value == 42.0
+
+    empty = store.get_metrics(agent_id="agent-3")
+    assert len(empty) == 0
+
+
+# ── Edge Cases & Robustness ─────────────────────────────────────
+
+
+def test_store_empty_queries(store):
+    """Fresh store list/query methods return empty collections, not errors."""
+    assert store.list_agents() == []
+    assert store.get_events() == []
+    assert store.query_events() == []
+    assert store.query_events(agent_id="nobody") == []
+    assert store.query_events(event_type="task") == []
+    assert store.query_runs() == []
+    assert store.query_runs(agent_name="ghost") == []
+    assert store.query_runs(status=RunStatus.COMPLETED) == []
+    assert store.list_runs("nonexistent") == []
+    assert store.get_metrics() == []
+    assert store.get_metrics(agent_id="nope") == []
+    assert store.get_all_agent_metrics() == []
+    assert store.tasks_by_project("p-missing") == []
+    assert store.tasks_by_status("created") == []
+    assert store.pending_approvals() == []
+    assert store.reviews_for_task("t-missing") == []
+
+
+def test_store_large_payload(store):
+    """Store a task result with 10 KB+ output and verify retrieval intact."""
+    large_output = "X" * 12_000  # 12 KB string
+    tr = TaskResult(
+        task_id="big-task",
+        run_id="run-big",
+        name="heavy-lift",
+        status="success",
+        output=large_output,
+        metadata={"size": len(large_output)},
+    )
+    store.store_task_result(tr)
+    fetched = store.get_task_result("big-task")
+    assert fetched is not None
+    assert fetched.output == large_output
+    assert len(fetched.output) == 12_000
+    assert fetched.metadata == {"size": 12_000}
+
+
+def test_store_special_characters(store):
+    """Agent names and values with unicode, spaces, and special chars round-trip."""
+    special_name = "ägent-🎃 spëcial/chars & more"
+    agent = Agent(id="sp1", name=special_name, description="Ünïcödé «desc»")
+    store.register_agent(agent)
+
+    fetched = store.get_agent(special_name)
+    assert fetched is not None
+    assert fetched.name == special_name
+    assert fetched.description == "Ünïcödé «desc»"
+
+    # Run with special-char agent name
+    run = store.start_run(special_name, "run-ünïcödé")
+    assert run.agent_name == special_name
+    runs = store.list_runs(special_name)
+    assert len(runs) == 1
+    assert runs[0].run_id == "run-ünïcödé"
+
+    # Task result with unicode output
+    tr = TaskResult(
+        task_id="task-ünïcödé",
+        run_id="run-ünïcödé",
+        name="résult",
+        output="日本語テスト 🎃 émojis & spëcial <chars>",
+    )
+    store.store_task_result(tr)
+    fetched_tr = store.get_task_result("task-ünïcödé")
+    assert fetched_tr.output == "日本語テスト 🎃 émojis & spëcial <chars>"
+
+    # Event with special chars
+    store.log_event(AuditEvent(
+        agent_id="sp1",
+        action="tëst.spëcial",
+        entity_type="ägent",
+        detail="d\u00e9tails with \u00abquotes\u00bb and \u201ccurly\u201d",
+    ))
+    events = store.query_events(agent_id="sp1")
+    assert len(events) == 1
+    assert "\u00e9tails" in events[0].detail
+    assert "\u201ccurly\u201d" in events[0].detail
+
+
+def test_store_multiple_runs_same_agent(store):
+    """Verify 10+ runs for one agent are all tracked correctly."""
+    agent_name = "busy-agent"
+    run_ids = [f"run-{i}" for i in range(15)]
+
+    for rid in run_ids:
+        store.start_run(agent_name, rid)
+
+    # All 15 runs present
+    runs = store.list_runs(agent_name)
+    assert len(runs) == 15
+    assert {r.run_id for r in runs} == set(run_ids)
+
+    # Complete even-numbered, fail odd-numbered
+    for i, rid in enumerate(run_ids):
+        if i % 2 == 0:
+            store.complete_run(rid)
+        else:
+            store.fail_run(rid, error=f"error-{i}")
+
+    # Verify statuses
+    completed = store.query_runs(agent_name=agent_name, status=RunStatus.COMPLETED)
+    failed = store.query_runs(agent_name=agent_name, status=RunStatus.FAILED)
+    running = store.query_runs(agent_name=agent_name, status=RunStatus.RUNNING)
+    assert len(completed) == 8  # indices 0,2,4,6,8,10,12,14
+    assert len(failed) == 7     # indices 1,3,5,7,9,11,13
+    assert len(running) == 0
+
+    # Each run is individually retrievable
+    for rid in run_ids:
+        assert store.get_run(rid) is not None
+        assert store.get_run(rid).agent_name == agent_name
