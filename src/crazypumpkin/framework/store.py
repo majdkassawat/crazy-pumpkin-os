@@ -678,6 +678,7 @@ class Store:
                 created_at=d.get("created_at", ""),
                 closed_at=d.get("closed_at", ""),
                 total_cost_usd=d.get("total_cost_usd", 0.0),
+                metadata=d.get("metadata", {}),
             )
             session.messages = [
                 SessionMessage(

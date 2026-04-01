@@ -5,13 +5,15 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from crazypumpkin.framework.models import AgentStatus
+from crazypumpkin.framework.models import AgentStatus, RunRecord
 
 if TYPE_CHECKING:
     from crazypumpkin.framework.registry import AgentRegistry
+    from crazypumpkin.framework.store import Store
 
 logger = logging.getLogger("crazypumpkin.lifecycle")
 
@@ -234,6 +236,60 @@ def should_restart(
         return lifecycle_state == LifecycleState.ERRORED
 
     return False
+
+
+async def execute_run(
+    registry: AgentRegistry,
+    agent_id: str,
+    store: Store,
+    *,
+    task: Any = None,
+) -> RunRecord:
+    """Execute a single agent run and persist a RunRecord to the store.
+
+    If the agent is already ACTIVE, records an immediate failure.
+    If *task* is provided, calls ``agent.execute(task, context=None)``; any
+    exception is captured as a failure.  When no task is given the run
+    succeeds without invoking execute().
+    """
+    started_at = datetime.now(timezone.utc)
+    record = RunRecord(agent_name="", started_at=started_at)
+
+    agent = registry.get(agent_id)
+    if agent is None:
+        record.agent_name = agent_id
+        record.status = "failure"
+        record.error = f"Agent '{agent_id}' not found"
+        record.finished_at = datetime.now(timezone.utc)
+        record.duration_ms = (record.finished_at - started_at).total_seconds() * 1000
+        await store.save_run_record(record)
+        return record
+
+    record.agent_name = agent.name
+
+    if agent.agent.status == AgentStatus.ACTIVE:
+        record.status = "failure"
+        record.error = f"Agent '{agent_id}' already running"
+        record.finished_at = datetime.now(timezone.utc)
+        record.duration_ms = (record.finished_at - started_at).total_seconds() * 1000
+        await store.save_run_record(record)
+        return record
+
+    agent.agent.status = AgentStatus.ACTIVE
+    try:
+        if task is not None:
+            agent.execute(task, None)
+        record.status = "success"
+    except Exception as exc:
+        record.status = "failure"
+        record.error = str(exc)
+    finally:
+        agent.agent.status = AgentStatus.IDLE
+
+    record.finished_at = datetime.now(timezone.utc)
+    record.duration_ms = (record.finished_at - started_at).total_seconds() * 1000
+    await store.save_run_record(record)
+    return record
 
 
 def managed_restart(

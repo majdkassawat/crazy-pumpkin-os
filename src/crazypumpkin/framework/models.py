@@ -396,6 +396,7 @@ class Session:
     created_at: str = field(default_factory=_now)
     closed_at: str = ""
     total_cost_usd: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # ── Run Record ─────────────────────────────────────────────────────
