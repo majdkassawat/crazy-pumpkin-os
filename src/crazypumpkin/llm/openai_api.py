@@ -52,6 +52,13 @@ class OpenAIProvider(LLMProvider):
     """LLM provider backed by the OpenAI chat completions API."""
 
     def __init__(self, config: dict | None = None) -> None:
+        """Initialise the OpenAI provider.
+
+        Args:
+            config: Optional configuration dict. Recognised keys are
+                ``api_key`` (falls back to the ``OPENAI_API_KEY`` env var)
+                and ``model`` (defaults to ``gpt-4o``).
+        """
         config = config or {}
         api_key = config.get("api_key") or os.environ.get("OPENAI_API_KEY")
         self._client = OpenAI(api_key=api_key)
@@ -72,6 +79,22 @@ class OpenAIProvider(LLMProvider):
         system: str | None = None,
         cache: bool = True,
     ) -> str:
+        """Send a single prompt to the OpenAI chat completions API.
+
+        Args:
+            prompt: The user message to send.
+            model: Model name or alias (e.g. ``"gpt-4o"``, ``"fast"``).
+                When ``None`` the provider's default model is used.
+            timeout: Optional request timeout in seconds.
+            cwd: Working directory hint (unused by this provider).
+            tools: Anthropic-format tool definitions; automatically converted
+                to OpenAI function-calling format.
+            system: Optional system prompt (unused by this provider).
+            cache: Whether to enable prompt caching (unused by this provider).
+
+        Returns:
+            The model's text response.
+        """
         resolved = self._resolve_model(model)
         kwargs: dict = {
             "model": resolved,
@@ -94,7 +117,20 @@ class OpenAIProvider(LLMProvider):
         system: str | None = None,
         cache: bool = True,
     ) -> tuple[str, CallCost]:
-        """Like call() but also returns a CallCost with token/cost info."""
+        """Send a prompt and return both the text response and cost information.
+
+        Args:
+            prompt: The user message to send.
+            model: Model name or alias. When ``None`` the provider's
+                default model is used.
+            timeout: Optional request timeout in seconds.
+            system: Optional system prompt (unused by this provider).
+            cache: Whether to enable prompt caching (unused by this provider).
+
+        Returns:
+            A tuple of ``(text, cost)`` where *text* is the model's response
+            and *cost* is a ``CallCost`` with token counts and USD cost.
+        """
         resolved = self._resolve_model(model)
         kwargs: dict = {
             "model": resolved,
@@ -129,9 +165,41 @@ class OpenAIProvider(LLMProvider):
         system: str | None = None,
         cache: bool = True,
     ) -> str:
+        """Run a multi-turn conversation (delegates to a single ``call()``).
+
+        The OpenAI provider does not currently implement a native multi-turn
+        loop; it forwards to ``call()`` with the supplied arguments.
+
+        Args:
+            prompt: The initial user message.
+            max_turns: Maximum number of turns (unused — single turn only).
+            tools: Anthropic-format tool definitions.
+            timeout: Optional request timeout in seconds.
+            cwd: Working directory hint (unused by this provider).
+            system: Optional system prompt (unused by this provider).
+            cache: Whether to enable prompt caching (unused by this provider).
+
+        Returns:
+            The model's text response from a single turn.
+        """
         return self.call(prompt, tools=tools, timeout=timeout, cwd=cwd, system=system, cache=cache)
 
     def call_json(self, prompt: str, **kwargs: object) -> dict | list:
+        """Send a prompt and parse the response as JSON.
+
+        Uses OpenAI's ``response_format={"type": "json_object"}`` to
+        guarantee valid JSON output.
+
+        Args:
+            prompt: The user message to send.
+            **kwargs: Optional overrides including ``model``.
+
+        Returns:
+            The parsed JSON response as a ``dict`` or ``list``.
+
+        Raises:
+            json.JSONDecodeError: If the model response is not valid JSON.
+        """
         resolved = self._resolve_model(kwargs.pop("model", None))  # type: ignore[arg-type]
         response = self._client.chat.completions.create(
             model=resolved,

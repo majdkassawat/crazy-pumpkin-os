@@ -41,6 +41,13 @@ class AnthropicProvider(LLMProvider):
     """LLM provider backed by the Anthropic messages API."""
 
     def __init__(self, config: dict | None = None) -> None:
+        """Initialise the Anthropic provider.
+
+        Args:
+            config: Optional configuration dict. Recognised keys are
+                ``api_key`` (falls back to the ``ANTHROPIC_API_KEY`` env var)
+                and ``model`` (defaults to ``claude-sonnet-4-6``).
+        """
         config = config or {}
         api_key = config.get("api_key") or os.environ.get("ANTHROPIC_API_KEY")
         self._client = Anthropic(api_key=api_key)
@@ -104,6 +111,21 @@ class AnthropicProvider(LLMProvider):
         system: str | None = None,
         cache: bool = True,
     ) -> str:
+        """Send a single prompt to the Anthropic messages API.
+
+        Args:
+            prompt: The user message to send.
+            model: Model name or alias (e.g. ``"opus"``, ``"sonnet"``).
+                When ``None`` the provider's default model is used.
+            timeout: Optional request timeout in seconds.
+            cwd: Working directory hint (unused by this provider).
+            tools: Anthropic-format tool definitions.
+            system: Optional system prompt.
+            cache: Whether to enable prompt caching on the system prompt.
+
+        Returns:
+            The model's text response.
+        """
         resolved = self._resolve_model(model)
         kwargs: dict = {
             "model": resolved,
@@ -130,7 +152,20 @@ class AnthropicProvider(LLMProvider):
         system: str | None = None,
         cache: bool = True,
     ) -> tuple[str, CallCost]:
-        """Like call() but also returns a CallCost with token/cost info."""
+        """Send a prompt and return both the text response and cost information.
+
+        Args:
+            prompt: The user message to send.
+            model: Model name or alias. When ``None`` the provider's
+                default model is used.
+            timeout: Optional request timeout in seconds.
+            system: Optional system prompt.
+            cache: Whether to enable prompt caching on the system prompt.
+
+        Returns:
+            A tuple of ``(text, cost)`` where *text* is the model's response
+            and *cost* is a ``CallCost`` with token counts and USD cost.
+        """
         resolved = self._resolve_model(model)
         kwargs: dict = {
             "model": resolved,
@@ -164,6 +199,19 @@ class AnthropicProvider(LLMProvider):
         return text, call_cost
 
     def call_json(self, prompt: str, **kwargs: object) -> dict | list:
+        """Send a prompt and parse the response as JSON.
+
+        Args:
+            prompt: The user message to send.
+            **kwargs: Optional overrides including ``model``, ``timeout``,
+                ``system``, and ``cache``.
+
+        Returns:
+            The parsed JSON response as a ``dict`` or ``list``.
+
+        Raises:
+            json.JSONDecodeError: If the model response is not valid JSON.
+        """
         resolved = self._resolve_model(kwargs.pop("model", None))  # type: ignore[arg-type]
         timeout = kwargs.pop("timeout", None)
         system = kwargs.pop("system", None)
@@ -207,6 +255,11 @@ class AnthropicProvider(LLMProvider):
             tool_executor: Optional callable ``(name, input) -> str`` that
                 executes a tool call and returns its string result. When
                 ``None`` every tool call returns ``"ok"``.
+            system: Optional system prompt prepended to the conversation.
+            cache: Whether to enable prompt caching on the system prompt.
+
+        Returns:
+            The concatenated text output across all turns.
         """
         if not tools:
             return self.call(prompt, timeout=timeout, cwd=cwd, system=system, cache=cache)
