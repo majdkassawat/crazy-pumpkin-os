@@ -19,19 +19,30 @@ class AllProvidersExhaustedError(Exception):
 
 @dataclass
 class RetryPolicy:
+    """Configuration for retry behaviour with exponential backoff."""
+
     max_retries: int = 3
     base_delay: float = 1.0
     max_delay: float = 30.0
     exponential_base: float = 2.0
 
     def delay_for_attempt(self, attempt: int) -> float:
-        """Return delay in seconds for the given attempt number (0-indexed)."""
+        """Return delay in seconds for the given attempt number (0-indexed).
+
+        Args:
+            attempt: Zero-indexed attempt number.
+
+        Returns:
+            The delay in seconds, capped at ``max_delay``.
+        """
         delay = self.base_delay * (self.exponential_base ** attempt)
         return min(delay, self.max_delay)
 
 
 @dataclass
 class FallbackChain:
+    """Ordered list of provider names to try with an associated retry policy."""
+
     provider_names: list[str] = field(default_factory=list)
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
 
@@ -66,6 +77,17 @@ class ProviderRegistry:
     """
 
     def __init__(self, config: dict, store: Store | None = None) -> None:
+        """Initialise the registry from an LLM configuration dict.
+
+        Args:
+            config: The ``llm`` section of config.yaml. Must contain a
+                ``default_provider`` key and may contain ``providers``
+                and ``agent_models`` mappings.
+            store: Optional ``Store`` used for budget tracking.
+
+        Raises:
+            KeyError: If ``default_provider`` is missing from *config*.
+        """
         self._config = config
         self._store = store
         self._default_provider_name: str = config["default_provider"]
@@ -87,6 +109,18 @@ class ProviderRegistry:
 
         Falls back to the default provider when the agent key is absent
         from ``agent_models``.
+
+        Args:
+            agent: Optional agent name used to look up a provider/model
+                override in the ``agent_models`` config section.
+
+        Returns:
+            A tuple of ``(provider, model)`` where *provider* is the
+            ``LLMProvider`` instance and *model* is the model override
+            string (or ``None`` if no override is configured).
+
+        Raises:
+            KeyError: If the resolved provider name is not registered.
         """
         override = self._agent_models.get(agent) if agent else None
 
@@ -135,8 +169,23 @@ class ProviderRegistry:
         When *model* is provided it takes precedence over the model
         returned by the ``agent_models`` lookup.
 
-        Raises ``BudgetExceededError`` if the agent has exceeded its
-        monthly budget cap.
+        Args:
+            prompt: The user message to send.
+            agent: Optional agent name for provider/model resolution.
+            agent_config: Optional ``AgentConfig`` used for budget checks.
+            model: Explicit model override; takes precedence over the
+                agent-level model mapping.
+            timeout: Optional request timeout in seconds.
+            cwd: Working directory hint passed to tool-using models.
+            tools: Tool definitions in provider-native format.
+            system: Optional system prompt prepended to the conversation.
+
+        Returns:
+            The model's text response.
+
+        Raises:
+            BudgetExceededError: If the agent has exceeded its monthly
+                budget cap.
         """
         self._check_budget(agent, agent_config)
         provider, agent_model = self.get_provider(agent)
@@ -168,8 +217,23 @@ class ProviderRegistry:
         When *model* is provided it takes precedence over the model
         returned by the ``agent_models`` lookup.
 
-        Raises ``BudgetExceededError`` if the agent has exceeded its
-        monthly budget cap.
+        Args:
+            prompt: The initial user message.
+            agent: Optional agent name for provider/model resolution.
+            agent_config: Optional ``AgentConfig`` used for budget checks.
+            model: Explicit model override; takes precedence over the
+                agent-level model mapping.
+            max_turns: Maximum number of request/response turns.
+            timeout: Optional request timeout in seconds per turn.
+            cwd: Working directory hint passed to tool-using models.
+            tools: Tool definitions in provider-native format.
+
+        Returns:
+            The concatenated text output across all turns.
+
+        Raises:
+            BudgetExceededError: If the agent has exceeded its monthly
+                budget cap.
         """
         self._check_budget(agent, agent_config)
         provider, agent_model = self.get_provider(agent)
@@ -196,8 +260,22 @@ class ProviderRegistry:
         When *model* is provided it takes precedence over the model
         returned by the ``agent_models`` lookup.
 
-        Raises ``BudgetExceededError`` if the agent has exceeded its
-        monthly budget cap.
+        Args:
+            prompt: The user message to send.
+            agent: Optional agent name for provider/model resolution.
+            agent_config: Optional ``AgentConfig`` used for budget checks.
+            model: Explicit model override; takes precedence over the
+                agent-level model mapping.
+            **kwargs: Additional keyword arguments forwarded to the
+                provider's ``call_json`` (e.g. ``timeout``, ``system``).
+
+        Returns:
+            The parsed JSON response as a ``dict`` or ``list``.
+
+        Raises:
+            BudgetExceededError: If the agent has exceeded its monthly
+                budget cap.
+            json.JSONDecodeError: If the model response is not valid JSON.
         """
         self._check_budget(agent, agent_config)
         provider, agent_model = self.get_provider(agent)
@@ -211,8 +289,21 @@ class ProviderRegistry:
     ) -> dict:
         """Try each provider in *chain* with retries and exponential backoff.
 
-        Raises ``AllProvidersExhaustedError`` if every provider has been
-        exhausted after all retry attempts.
+        Args:
+            chain: A ``FallbackChain`` specifying provider order and retry
+                policy.
+            messages: A list of message dicts; the first message's
+                ``content`` value is used as the prompt.
+            **kwargs: Additional keyword arguments forwarded to each
+                provider's ``call`` method.
+
+        Returns:
+            A dict with keys ``provider`` (the name of the provider that
+            succeeded) and ``result`` (the text response).
+
+        Raises:
+            AllProvidersExhaustedError: If every provider in the chain
+                fails after all retry attempts.
         """
         all_errors: list[tuple[str, Exception]] = []
         for provider_name in chain.provider_names:

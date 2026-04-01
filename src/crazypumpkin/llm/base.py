@@ -30,6 +30,12 @@ class CostTracker:
         self._by_model: dict[str, dict[str, Any]] = {}
 
     def record(self, model: str, cost: CallCost) -> None:
+        """Record the cost of a single LLM call.
+
+        Args:
+            model: The model identifier used for the call.
+            cost: A ``CallCost`` instance containing token counts and USD cost.
+        """
         with self._lock:
             self._total_cost_usd += cost.cost_usd
             self._call_count += 1
@@ -56,6 +62,14 @@ class CostTracker:
             m["total_cache_read_tokens"] += cost.cache_read_tokens
 
     def get_summary(self) -> dict[str, Any]:
+        """Return a snapshot of accumulated cost data.
+
+        Returns:
+            A dict with keys ``total_cost_usd``, ``call_count``,
+            ``total_prompt_tokens``, ``total_completion_tokens``,
+            ``total_cache_creation_tokens``, ``total_cache_read_tokens``,
+            and ``by_model`` (a per-model breakdown).
+        """
         with self._lock:
             return {
                 "total_cost_usd": self._total_cost_usd,
@@ -68,6 +82,7 @@ class CostTracker:
             }
 
     def reset(self) -> None:
+        """Reset all accumulated cost data to zero."""
         with self._lock:
             self._total_cost_usd = 0.0
             self._call_count = 0
@@ -105,10 +120,38 @@ class LLMProvider(ABC):
         tools: list | None = None,
         system: str | None = None,
         cache: bool = True,
-    ) -> str: ...
+    ) -> str:
+        """Send a single prompt to the LLM and return the text response.
+
+        Args:
+            prompt: The user message to send.
+            model: Model identifier override. When ``None`` the provider's
+                default model is used.
+            timeout: Optional request timeout in seconds.
+            cwd: Working directory hint passed to tool-using models.
+            tools: Tool definitions in provider-native format.
+            system: Optional system prompt prepended to the conversation.
+            cache: Whether to enable prompt caching (provider-dependent).
+
+        Returns:
+            The model's text response.
+        """
 
     @abstractmethod
-    def call_json(self, prompt: str, **kwargs: object) -> dict | list: ...
+    def call_json(self, prompt: str, **kwargs: object) -> dict | list:
+        """Send a prompt and parse the response as JSON.
+
+        Args:
+            prompt: The user message to send.
+            **kwargs: Additional keyword arguments forwarded to the underlying
+                provider (e.g. ``model``, ``timeout``, ``system``).
+
+        Returns:
+            The parsed JSON response as a ``dict`` or ``list``.
+
+        Raises:
+            json.JSONDecodeError: If the model response is not valid JSON.
+        """
 
     @abstractmethod
     def call_multi_turn(
@@ -122,4 +165,18 @@ class LLMProvider(ABC):
         system: str | None = None,
         cache: bool = True,
     ) -> str:
-        """Run an agentic conversation loop until the model stops issuing tool calls or *max_turns* is reached."""
+        """Run an agentic conversation loop until the model stops issuing tool calls or *max_turns* is reached.
+
+        Args:
+            prompt: The initial user message.
+            max_turns: Maximum number of request/response turns.
+            tools: Tool definitions in provider-native format. If ``None``
+                or empty, falls back to a single-turn ``call()``.
+            timeout: Optional request timeout in seconds per turn.
+            cwd: Working directory hint passed to tool-using models.
+            system: Optional system prompt prepended to the conversation.
+            cache: Whether to enable prompt caching (provider-dependent).
+
+        Returns:
+            The concatenated text output across all turns.
+        """
