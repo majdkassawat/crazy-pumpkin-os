@@ -846,29 +846,53 @@ def cli_run(agent_name, config_path, param, timeout):
         sys.exit(1)
 
 
+def _get_cost_tracker():
+    """Return the global CostTracker instance."""
+    from crazypumpkin.observability.cost import CostTracker
+    return CostTracker()
+
+
 @friendly_errors
 def cmd_cost(args):
     """Display LLM cost tracking summary."""
-    from crazypumpkin.observability.metrics import get_llm_cost_snapshot
+    from datetime import datetime, timedelta
+    from crazypumpkin.observability.cost import LLMUsageRecord
 
-    snap = get_llm_cost_snapshot()
+    days = getattr(args, "days", 7) or 7
+    tracker = _get_cost_tracker()
 
-    print(f"Total cost: ${snap['total_cost_usd']:.4f}")
-    print(f"Total calls: {snap['call_count']}")
-    print(f"Prompt tokens: {snap['total_prompt_tokens']}")
-    print(f"Completion tokens: {snap['total_completion_tokens']}")
-    print(f"Cache read tokens: {snap['total_cache_read_tokens']}")
-    print(f"Cache creation tokens: {snap['total_cache_creation_tokens']}")
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    records = [r for r in tracker._records if r.timestamp >= cutoff]
 
-    by_model = snap.get("by_model", {})
-    if by_model:
-        print("\nPer-model breakdown:")
-        for model_name, info in by_model.items():
-            cost = info.get("cost_usd", info.get("total_cost_usd", 0.0))
-            calls = info.get("call_count", 0)
-            prompt = info.get("prompt_tokens", info.get("total_prompt_tokens", 0))
-            completion = info.get("completion_tokens", info.get("total_completion_tokens", 0))
-            print(f"  {model_name}: ${cost:.4f} | {calls} calls | {prompt}+{completion} tokens")
+    print(f"=== LLM Spend Summary (last {days} days) ===")
+    print()
+
+    if not records:
+        print(f"No LLM usage data found in the last {days} days.")
+        return
+
+    total_spend = sum(r.cost_usd for r in records)
+    print(f"Total spend: ${total_spend:.2f}")
+    print()
+
+    by_agent: dict = {}
+    for r in records:
+        by_agent[r.agent_name] = by_agent.get(r.agent_name, 0.0) + r.cost_usd
+    print("Per-agent breakdown:")
+    for agent, cost in sorted(by_agent.items()):
+        print(f"  {agent}: ${cost:.2f}")
+    print()
+
+    by_model: dict = {}
+    for r in records:
+        by_model[r.model] = by_model.get(r.model, 0.0) + r.cost_usd
+    print("Per-model breakdown:")
+    for model, cost in sorted(by_model.items()):
+        print(f"  {model}: ${cost:.2f}")
+    print()
+
+    total_cached = sum(r.cached_tokens for r in records)
+    print(f"Cached token savings: {total_cached} tokens")
 
 
 @friendly_errors

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from crazypumpkin.framework.registry import AgentRegistry
     from crazypumpkin.framework.store import Store
+
+from aiohttp import web
 
 from crazypumpkin.framework.models import AgentStatus, TaskStatus
 
@@ -97,6 +100,35 @@ def get_dashboard_data(
             "total_usd": round(total_usd, 4),
         },
     }
+
+
+async def handle_cost_summary(request: web.Request) -> web.Response:
+    """GET /api/cost — return CostTracker summary as JSON."""
+    tracker = request.app["cost_tracker"]
+    records = tracker._records
+
+    total_spend = sum(r.cost_usd for r in records)
+    by_agent: dict[str, float] = {}
+    by_model: dict[str, float] = {}
+    for r in records:
+        by_agent[r.agent_name] = by_agent.get(r.agent_name, 0.0) + r.cost_usd
+        by_model[r.model] = by_model.get(r.model, 0.0) + r.cost_usd
+
+    payload = {
+        "total_spend_usd": total_spend,
+        "by_agent": by_agent,
+        "by_model": by_model,
+        "record_count": len(records),
+    }
+    return web.Response(
+        text=json.dumps(payload),
+        content_type="application/json",
+    )
+
+
+def setup_routes(app: web.Application) -> None:
+    """Register all API routes on the aiohttp Application."""
+    app.router.add_get("/api/cost", handle_cost_summary)
 
 
 def get_agent_statuses(registry: "AgentRegistry") -> list[dict]:
