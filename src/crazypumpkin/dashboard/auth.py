@@ -58,13 +58,18 @@ def verify_password(password: str, hashed_password: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _get_jwt_secret() -> str:
-    """Return the JWT signing secret from the environment.
+    """Return the JWT signing secret from the ``CP_JWT_SECRET`` environment variable.
 
-    Falls back to a per-process random secret when the env var is unset
-    (suitable for development; production deployments MUST set
-    ``CP_JWT_SECRET``).
+    Raises :class:`RuntimeError` if the variable is not set — cryptographic
+    secrets must never fall back silently to random values.
     """
-    return os.environ.get("CP_JWT_SECRET") or secrets.token_hex(32)
+    secret = os.environ.get("CP_JWT_SECRET")
+    if not secret:
+        raise RuntimeError(
+            "CP_JWT_SECRET environment variable is not set. "
+            "Set it to a stable, random secret before starting the dashboard."
+        )
+    return secret
 
 
 # Materialise once per process so all calls within the same process share the
@@ -206,4 +211,16 @@ def auth_required(token: str) -> DashboardUser:
     user = _USER_STORE.get(email)
     if user is None:
         raise AuthError("User not found", status_code=401)
+    return user
+
+
+def admin_required(token: str) -> DashboardUser:
+    """Auth middleware — validate JWT and require admin role.
+
+    Raises :class:`AuthError` (401) if the token is invalid, or (403) if the
+    authenticated user does not have the ``ADMIN`` role.
+    """
+    user = auth_required(token)
+    if user.role != DashboardRole.ADMIN:
+        raise AuthError("Admin role required", status_code=403)
     return user
