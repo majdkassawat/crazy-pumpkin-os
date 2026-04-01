@@ -1,11 +1,6 @@
 """Tests for scheduler retry logic — backoff, failure handling, completion."""
 
-import sys
-from pathlib import Path
-
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from crazypumpkin.framework.models import JobStatus, PersistedJob
 from crazypumpkin.scheduler.retry import calculate_backoff, complete_job, handle_job_failure

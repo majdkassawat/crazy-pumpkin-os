@@ -1,12 +1,7 @@
 """Tests for CLI `jobs` and `retry-job` commands."""
 
-import sys
-from pathlib import Path
-
 import pytest
 from click.testing import CliRunner
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from crazypumpkin.cli import cli
 from crazypumpkin.framework.models import JobStatus, PersistedJob

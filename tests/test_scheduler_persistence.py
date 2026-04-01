@@ -1,11 +1,6 @@
 """Tests for PersistedJob model and Store job persistence."""
 
-import sys
-from pathlib import Path
-
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from crazypumpkin.framework.models import JobStatus, PersistedJob
 from crazypumpkin.framework.store import Store
