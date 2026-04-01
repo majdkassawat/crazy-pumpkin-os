@@ -82,17 +82,17 @@ class TestTriggerPublicAPI:
         result = trigger_mod.evaluate_trigger("x > 0", {"x": 1})
         assert result is True
 
-    def test_cron_trigger_not_yet_present(self):
-        """CronTrigger exists in upstream but not in this worktree."""
-        assert not hasattr(trigger_mod, "CronTrigger")
+    def test_cron_trigger_present(self):
+        """CronTrigger class is available in this worktree."""
+        assert hasattr(trigger_mod, "CronTrigger")
 
-    def test_register_cron_trigger_not_yet_present(self):
-        """register_cron_trigger exists in upstream but not in this worktree."""
-        assert not hasattr(trigger_mod, "register_cron_trigger")
+    def test_register_cron_trigger_present(self):
+        """register_cron_trigger is available in this worktree."""
+        assert callable(trigger_mod.register_cron_trigger)
 
-    def test_cron_trigger_registry_not_yet_present(self):
-        """_cron_trigger_registry exists in upstream but not in this worktree."""
-        assert not hasattr(trigger_mod, "_cron_trigger_registry")
+    def test_cron_trigger_registry_present(self):
+        """_cron_trigger_registry is available in this worktree."""
+        assert hasattr(trigger_mod, "_cron_trigger_registry")
 
 
 # ── (c) Argparse schedule subcommands ──────────────────────────────

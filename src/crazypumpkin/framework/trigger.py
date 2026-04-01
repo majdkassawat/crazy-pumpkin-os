@@ -12,7 +12,7 @@ Sentinels: ``always`` (True), ``never`` (False), ``schedule`` (True)
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -265,3 +265,65 @@ def evaluate_trigger(expr: str, snapshot: dict[str, Any]) -> bool:
     """
     ast = parse_trigger(expr)
     return _evaluate(ast, snapshot)
+
+
+# ---------------------------------------------------------------------------
+# Cron trigger support
+# ---------------------------------------------------------------------------
+
+
+class CronTrigger:
+    """A named cron-based trigger with an associated callback."""
+
+    def __init__(self, name: str, cron_expr: str, callback: Callable) -> None:
+        self.name = name
+        self.cron_expr = cron_expr
+        self.callback = callback
+        self._fired = False
+
+    def should_fire(self) -> bool:
+        """Check whether this trigger should fire based on its cron expression.
+
+        Uses :func:`crazypumpkin.scheduler.cron.parse_cron_expression` to
+        validate the expression and compares against the current time.
+        """
+        from datetime import datetime
+
+        from crazypumpkin.scheduler.cron import parse_cron_expression
+
+        now = datetime.now()
+        cron = parse_cron_expression(self.cron_expr)
+        return (
+            now.minute in cron.minute.values
+            and now.hour in cron.hour.values
+            and now.day in cron.dom.values
+            and now.month in cron.month.values
+            and now.weekday() in cron.dow.values
+        )
+
+    def fire(self) -> None:
+        """Invoke the callback."""
+        self._fired = True
+        self.callback()
+
+    def __repr__(self) -> str:
+        return f"CronTrigger(name={self.name!r}, cron={self.cron_expr!r})"
+
+
+_cron_trigger_registry: dict[str, CronTrigger] = {}
+
+
+def register_cron_trigger(name: str, cron_expr: str, callback: Callable) -> CronTrigger:
+    """Register a named cron trigger with a callback.
+
+    Args:
+        name: Unique identifier for this trigger.
+        cron_expr: A five-field cron expression string.
+        callback: Callable to invoke when the trigger fires.
+
+    Returns:
+        The newly created :class:`CronTrigger`.
+    """
+    trigger = CronTrigger(name, cron_expr, callback)
+    _cron_trigger_registry[name] = trigger
+    return trigger
