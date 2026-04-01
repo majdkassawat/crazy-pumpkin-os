@@ -57,12 +57,12 @@ agents:
     trigger: "idle_products > 0"
     description: "Ingests goals, creates projects, breaks into tasks"
 
-  # Retry policy applied to agent LLM calls on transient failures
-  retry:
-    max_attempts: 3
-    base_delay: 1.0
-    max_delay: 60
-    backoff_factor: 2
+# Retry policy applied to agent LLM calls on transient failures
+retry:
+  max_attempts: 3
+  base_delay: 1.0
+  max_delay: 60
+  backoff_factor: 2
 
 pipeline:
   cycle_interval: 30       # seconds between cycles
