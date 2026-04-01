@@ -11,12 +11,12 @@ import enum
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from crazypumpkin.framework.models import (
     Agent, AgentConfig, AgentMetrics, Approval, ApprovalStatus, ChangeProposal,
     Project, ProjectStatus, ProposalStatus, ProposalType, Review,
-    ReviewDecision, Task, TaskOutput, TaskStatus,
+    ReviewDecision, RunRecord, Task, TaskOutput, TaskStatus,
 )
 
 
@@ -45,6 +45,7 @@ class Store:
         self.approvals: dict[str, Approval] = {}
         self.proposals: dict[str, ChangeProposal] = {}
         self._agent_metrics: dict[str, AgentMetrics] = {}
+        self._run_history: dict[str, RunRecord] = {}
         self._data_dir = data_dir
         if data_dir:
             data_dir.mkdir(parents=True, exist_ok=True)
@@ -194,6 +195,32 @@ class Store:
                 ", ".join(f"{k}={v}" for k, v in totals.items() if v > 0),
             )
         return totals
+
+    # ── Run History ──
+
+    async def save_run_record(self, record: RunRecord) -> None:
+        """Persist a RunRecord keyed by run_id."""
+        self._run_history[record.run_id] = record
+
+    async def get_run_record(self, run_id: str) -> Optional[RunRecord]:
+        """Retrieve a single run record by ID."""
+        return self._run_history.get(run_id)
+
+    async def list_run_records(
+        self,
+        agent_name: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[RunRecord]:
+        """Query run records with optional filters, newest first."""
+        records = list(self._run_history.values())
+        if agent_name is not None:
+            records = [r for r in records if r.agent_name == agent_name]
+        if status is not None:
+            records = [r for r in records if r.status == status]
+        records.sort(key=lambda r: r.started_at, reverse=True)
+        return records[offset:offset + limit]
 
     def compute_digest_stats(self, window_hours: int = 24) -> dict:
         from datetime import datetime, timezone, timedelta

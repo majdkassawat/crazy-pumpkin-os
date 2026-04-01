@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from crazypumpkin.framework.models import AgentStatus
+from crazypumpkin.framework.models import AgentStatus, RunRecord
 
 if TYPE_CHECKING:
     from crazypumpkin.framework.registry import AgentRegistry
+    from crazypumpkin.framework.store import Store
 
 logger = logging.getLogger("crazypumpkin.lifecycle")
 
@@ -284,3 +287,49 @@ def managed_restart(
         stop_agent(registry, agent_id)
 
     return start_agent(registry, agent_id)
+
+
+async def execute_run(
+    registry: "AgentRegistry",
+    agent_id: str,
+    store: "Store",
+    task=None,
+    context=None,
+) -> RunRecord:
+    """Execute an agent run with full lifecycle tracking.
+
+    Creates a RunRecord at the start (status='running'), executes the agent,
+    then updates the record on completion (status='success') or failure
+    (status='failure').
+    """
+    base_agent = _resolve(registry, agent_id)
+    run_id = uuid.uuid4().hex
+    started_at = datetime.now(timezone.utc)
+
+    record = RunRecord(
+        run_id=run_id,
+        agent_name=base_agent.name,
+        started_at=started_at,
+        status="running",
+    )
+    await store.save_run_record(record)
+
+    try:
+        start_agent(registry, agent_id)
+        if task is not None:
+            base_agent.execute(task, context)
+        stop_agent(registry, agent_id)
+
+        finished_at = datetime.now(timezone.utc)
+        record.status = "success"
+        record.finished_at = finished_at
+        record.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+    except Exception as exc:
+        finished_at = datetime.now(timezone.utc)
+        record.status = "failure"
+        record.finished_at = finished_at
+        record.duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+        record.error = str(exc)
+
+    await store.save_run_record(record)
+    return record

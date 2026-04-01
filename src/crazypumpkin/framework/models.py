@@ -353,6 +353,30 @@ class AgentMetrics:
     recent_outcomes: list[bool] = field(default_factory=list)
 
 
+# ── Run History ────────────────────────────────────────────────────
+
+_VALID_RUN_STATUSES: frozenset[str] = frozenset({"running", "success", "failure"})
+
+
+@dataclass
+class RunRecord:
+    """Record of a single agent run."""
+    run_id: str
+    agent_name: str
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    status: str = "running"  # 'running', 'success', 'failure'
+    error: Optional[str] = None
+    duration_ms: Optional[int] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.status not in _VALID_RUN_STATUSES:
+            raise ValueError(
+                f"Invalid status {self.status!r}; must be one of {sorted(_VALID_RUN_STATUSES)}"
+            )
+
+
 # ── Plugin ──────────────────────────────────────────────────────────
 
 @dataclass
