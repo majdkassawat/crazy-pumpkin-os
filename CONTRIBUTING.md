@@ -50,6 +50,30 @@ Changes that affect the project's legal standing, governance, or strategic direc
 
 ---
 
+## Feature Deliverables
+
+All features merged into Crazy Pumpkin OS are expected to include deliverables proportional to their scope. The product manager defines what's required per feature.
+
+### Deliverable Types
+
+| Type | When Required | What to Include |
+|---|---|---|
+| **Documentation** | Always (baseline for any feature) | Feature overview, API surface, usage examples, configuration |
+| **Screenshots** | UI or visual changes | Before/after screenshots, annotated output, CLI screenshots |
+| **Tutorial** | New user-facing features | Step-by-step guide with code examples and expected output |
+| **Video Demo** | Major features (rare) | Script or recording showing end-to-end usage |
+
+### How It Works
+
+- **Roadmap items**: The product manager specifies required deliverables as part of the goal definition. These are visible to anyone picking up the feature.
+- **Contributor PRs**: If your PR introduces a new feature not on the roadmap, the reviewer may consult the product manager and request deliverables before merge.
+- **Documentation is always required**: Every feature is documentable. Even internal changes should update relevant docs.
+- **Contributors produce their own deliverables**: The project does not produce deliverables on contributors' behalf.
+
+For features developed by internal agents, a dedicated Documentation Agent automatically produces the required deliverables after implementation is complete.
+
+---
+
 ## Development Setup
 
 ### Prerequisites
