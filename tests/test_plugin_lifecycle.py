@@ -216,6 +216,56 @@ class TestPluginLifecycleEnableDisable:
                 with pytest.raises(KeyError):
                     mgr.enable_plugin(bad_name)
 
+    def test_disable_already_disabled_returns_without_updating_timestamp(self, tmp_path):
+        """Calling disable_plugin on an already-disabled plugin returns
+        without updating the disabled_at timestamp."""
+        manifests = [_make_manifest(name="gamma")]
+        state_path = tmp_path / "plugin_state.json"
+
+        with patch(_DISCOVER, return_value=manifests):
+            mgr = PluginLifecycleManager(state_path=state_path)
+            mgr.enable_plugin("gamma")
+            mgr.disable_plugin("gamma")
+
+            original_disabled_at = mgr._state["gamma"]["disabled_at"]
+
+            result = mgr.disable_plugin("gamma")
+
+            # disabled_at must not have changed
+            assert mgr._state["gamma"]["disabled_at"] == original_disabled_at
+            # Second call returns the cached disabled state dict
+            assert result["enabled"] is False
+
+    def test_disable_already_disabled_logs_info_with_plugin_name(self, tmp_path):
+        """logger.info is called with a message containing the plugin name
+        when the plugin is already disabled."""
+        manifests = [_make_manifest(name="delta")]
+        state_path = tmp_path / "plugin_state.json"
+
+        with patch(_DISCOVER, return_value=manifests):
+            mgr = PluginLifecycleManager(state_path=state_path)
+            mgr.enable_plugin("delta")
+            mgr.disable_plugin("delta")
+
+            with patch(
+                "crazypumpkin.framework.plugin_lifecycle.logger"
+            ) as mock_logger:
+                mgr.disable_plugin("delta")
+
+            mock_logger.info.assert_called_once()
+            log_message = mock_logger.info.call_args[0][0] % mock_logger.info.call_args[0][1:]
+            assert "delta" in log_message
+
+    def test_disable_path_traversal_name_rejected(self, tmp_path):
+        """Plugin names containing path-traversal sequences are rejected by disable_plugin."""
+        state_path = tmp_path / "plugin_state.json"
+
+        with patch(_DISCOVER, return_value=[]):
+            mgr = PluginLifecycleManager(state_path=state_path)
+            for bad_name in ["../etc/passwd", "foo/bar", "a\\b", "", "ha\x00ck"]:
+                with pytest.raises(KeyError):
+                    mgr.disable_plugin(bad_name)
+
     def test_plugin_state_persistence(self, tmp_path):
         """Save state, create new manager with same store, verify state loads."""
         manifests = [_make_manifest(name="persist-me")]
