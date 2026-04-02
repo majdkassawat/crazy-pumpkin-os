@@ -1,5 +1,6 @@
 """Tests for PluginLifecycleManager enable/disable operations."""
 
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -166,3 +167,72 @@ class TestPluginLifecycleEnableDisable:
         # Only the pre-existing plugin should have state in the store
         assert "existing" in mgr2._state
         assert "new-discovery" not in mgr2._state
+
+    def test_enable_already_enabled_returns_cached_without_rediscovery(self, tmp_path):
+        """Calling enable_plugin twice returns cached state on the second call
+        without calling discover_plugins again."""
+        manifests = [_make_manifest(name="alpha")]
+        state_path = tmp_path / "plugin_state.json"
+
+        with patch(_DISCOVER, return_value=manifests) as mock_discover:
+            mgr = PluginLifecycleManager(state_path=state_path)
+            mgr.enable_plugin("alpha")
+
+            calls_after_first_enable = mock_discover.call_count
+
+            result = mgr.enable_plugin("alpha")
+
+            # discover_plugins must NOT be called again
+            assert mock_discover.call_count == calls_after_first_enable
+            # Second call returns the cached enabled state dict
+            assert result["enabled"] is True
+
+    def test_enable_already_enabled_logs_info_with_plugin_name(self, tmp_path):
+        """logger.info is called with a message containing the plugin name
+        when the plugin is already enabled."""
+        manifests = [_make_manifest(name="beta")]
+        state_path = tmp_path / "plugin_state.json"
+
+        with patch(_DISCOVER, return_value=manifests):
+            mgr = PluginLifecycleManager(state_path=state_path)
+            mgr.enable_plugin("beta")
+
+            with patch(
+                "crazypumpkin.framework.plugin_lifecycle.logger"
+            ) as mock_logger:
+                mgr.enable_plugin("beta")
+
+            mock_logger.info.assert_called_once()
+            log_message = mock_logger.info.call_args[0][0] % mock_logger.info.call_args[0][1:]
+            assert "beta" in log_message
+
+    def test_enable_path_traversal_name_rejected(self, tmp_path):
+        """Plugin names containing path-traversal sequences are rejected."""
+        state_path = tmp_path / "plugin_state.json"
+
+        with patch(_DISCOVER, return_value=[]):
+            mgr = PluginLifecycleManager(state_path=state_path)
+            for bad_name in ["../etc/passwd", "foo/bar", "a\\b", "", "ha\x00ck"]:
+                with pytest.raises(KeyError):
+                    mgr.enable_plugin(bad_name)
+
+    def test_plugin_state_persistence(self, tmp_path):
+        """Save state, create new manager with same store, verify state loads."""
+        manifests = [_make_manifest(name="persist-me")]
+        state_path = tmp_path / "plugin_state.json"
+
+        # Phase 1: enable plugin and let manager save state
+        with patch(_DISCOVER, return_value=manifests):
+            mgr1 = PluginLifecycleManager(state_path=state_path)
+            mgr1.enable_plugin("persist-me")
+
+        assert state_path.exists()
+
+        # Phase 2: create a brand new manager pointing at the same file
+        with patch(_DISCOVER, return_value=manifests):
+            mgr2 = PluginLifecycleManager(state_path=state_path)
+
+        # The new manager should have loaded the persisted state
+        assert "persist-me" in mgr2._state
+        assert mgr2._state["persist-me"]["enabled"] is True
+        assert "enabled_at" in mgr2._state["persist-me"]
