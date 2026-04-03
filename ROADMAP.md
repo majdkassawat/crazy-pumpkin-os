@@ -1,18 +1,21 @@
 # Roadmap
 
-*Auto-updated on 2026-04-01 by the Crazy Pumpkin pipeline.*
+*Auto-updated on 2026-04-03 by the Crazy Pumpkin pipeline.*
 
 ## Currently In Progress
 
-- **[Crazy Pumpkin OS] Agent communication and message bus**
-- **[Crazy Pumpkin OS] Dashboard authentication and user management**
+- **[Crazy Pumpkin OS] Prompt caching for LLM providers**
+- **[Crazy Pumpkin OS] CI/CD pipeline with GitHub Actions and PyPI publishing**
+- **[Crazy Pumpkin OS] Scheduler persistence and failure recovery**
+- **[Crazy Pumpkin OS] Notification system test coverage and delivery reliability**
 
 ## Recently Completed
 
-- ~~[Crazy Pumpkin OS] Multi-turn conversation session management~~
-- ~~[Crazy Pumpkin OS] CI/CD pipeline with GitHub Actions and PyPI publishing~~
-- ~~[Crazy Pumpkin OS] Prompt caching for LLM providers with token cost tracking~~
-- ~~[Crazy Pumpkin OS] Configuration schema validation and environment variable overrides~~
+- ~~[Crazy Pumpkin OS] Agent session persistence and multi-turn conversations~~
+- ~~[Crazy Pumpkin OS] Dashboard real-time agent monitoring via WebSocket~~
+- ~~[Crazy Pumpkin OS] Trigger system expression parser tests and cron-trigger integration~~
+- ~~[Crazy Pumpkin OS] Configuration schema validation and environment variable override system~~
+- ~~[Crazy Pumpkin OS] Framework store module comprehensive test coverage~~
 
 ## Open for Contribution
 
