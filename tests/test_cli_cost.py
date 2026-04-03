@@ -256,3 +256,101 @@ class TestCmdCostCombinedFlags:
         data = json.loads(out)
         assert "by_model" in data
         assert "by_agent" in data
+
+
+class TestCmdCostByAgentValues:
+    """Verify per-agent breakdown contains correct cost values."""
+
+    def test_by_agent_shows_per_agent_cost(self, capsys):
+        tracker = _make_tracker_with_data()
+        with patch("crazypumpkin.llm.base.get_default_tracker", return_value=tracker):
+            cmd_cost(_make_args(by_agent=True))
+        out = capsys.readouterr().out
+        assert "$0.0100" in out
+        assert "$0.0500" in out
+
+    def test_by_agent_json_values_correct(self, capsys):
+        tracker = _make_tracker_with_data()
+        with patch("crazypumpkin.llm.base.get_default_tracker", return_value=tracker):
+            cmd_cost(_make_args(use_json=True, by_agent=True))
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        dev = data["by_agent"]["developer"]
+        assert dev["total_cost_usd"] == pytest.approx(0.01)
+        assert dev["call_count"] == 1
+        assert dev["total_prompt_tokens"] == 100
+        strat = data["by_agent"]["strategist"]
+        assert strat["total_cost_usd"] == pytest.approx(0.05)
+        assert strat["call_count"] == 1
+
+    def test_by_model_json_values_correct(self, capsys):
+        tracker = _make_tracker_with_data()
+        with patch("crazypumpkin.llm.base.get_default_tracker", return_value=tracker):
+            cmd_cost(_make_args(use_json=True, by_model=True))
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        gpt = data["by_model"]["gpt-4"]
+        assert gpt["total_cost_usd"] == pytest.approx(0.01)
+        assert gpt["total_prompt_tokens"] == 100
+        assert gpt["total_completion_tokens"] == 50
+        claude = data["by_model"]["claude-3"]
+        assert claude["total_cost_usd"] == pytest.approx(0.05)
+        assert claude["total_prompt_tokens"] == 200
+
+
+class TestCmdCostBreakdownFormat:
+    """Verify the human-readable breakdown line format."""
+
+    def test_by_model_line_format(self, capsys):
+        tracker = _make_tracker_with_data()
+        with patch("crazypumpkin.llm.base.get_default_tracker", return_value=tracker):
+            cmd_cost(_make_args(by_model=True))
+        out = capsys.readouterr().out
+        assert "gpt-4: $0.0100 | 1 calls | 100+50 tokens" in out
+
+    def test_by_agent_line_format(self, capsys):
+        tracker = _make_tracker_with_data()
+        with patch("crazypumpkin.llm.base.get_default_tracker", return_value=tracker):
+            cmd_cost(_make_args(by_agent=True))
+        out = capsys.readouterr().out
+        assert "developer: $0.0100 | 1 calls | 100+50 tokens" in out
+
+    def test_total_cost_label(self, capsys):
+        tracker = _make_tracker_with_data()
+        with patch("crazypumpkin.llm.base.get_default_tracker", return_value=tracker):
+            cmd_cost(_make_args())
+        out = capsys.readouterr().out
+        assert "Total cost:" in out
+        assert "Total calls:" in out
+        assert "Prompt tokens:" in out
+        assert "Completion tokens:" in out
+        assert "Cache read tokens:" in out
+        assert "Cache creation tokens:" in out
+
+
+class TestCmdCostSubparserRegistration:
+    """Verify that the cost command is registered with correct arguments."""
+
+    def test_cost_parser_registered(self):
+        from crazypumpkin.cli import main
+        import inspect
+        source = inspect.getsource(main)
+        assert "cost" in source
+
+    def test_cost_parser_has_by_model_flag(self):
+        from crazypumpkin.cli import main
+        import inspect
+        source = inspect.getsource(main)
+        assert "--by-model" in source
+
+    def test_cost_parser_has_by_agent_flag(self):
+        from crazypumpkin.cli import main
+        import inspect
+        source = inspect.getsource(main)
+        assert "--by-agent" in source
+
+    def test_cost_parser_has_json_flag(self):
+        from crazypumpkin.cli import main
+        import inspect
+        source = inspect.getsource(main)
+        assert "--json" in source
