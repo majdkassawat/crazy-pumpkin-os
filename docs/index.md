@@ -6,6 +6,10 @@ Welcome to the Crazy Pumpkin OS documentation.
 
 - [Quickstart Guide](QUICKSTART.md) — Build a custom agent in 5 minutes
 
+## Guides
+
+- [Cost Observability](cost-observability.md) — Track LLM spend, set budgets, and view costs
+
 ## References
 
 - [API Reference](api-reference.md) — Public API classes, functions, and modules

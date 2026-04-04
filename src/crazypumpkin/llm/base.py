@@ -28,8 +28,9 @@ class CostTracker:
         self._total_cache_creation_tokens: int = 0
         self._total_cache_read_tokens: int = 0
         self._by_model: dict[str, dict[str, Any]] = {}
+        self._by_agent: dict[str, dict[str, Any]] = {}
 
-    def record(self, model: str, cost: CallCost) -> None:
+    def record(self, model: str, cost: CallCost, *, agent: str | None = None) -> None:
         with self._lock:
             self._total_cost_usd += cost.cost_usd
             self._call_count += 1
@@ -55,6 +56,24 @@ class CostTracker:
             m["total_cache_creation_tokens"] += cost.cache_creation_tokens
             m["total_cache_read_tokens"] += cost.cache_read_tokens
 
+            if agent is not None:
+                if agent not in self._by_agent:
+                    self._by_agent[agent] = {
+                        "total_cost_usd": 0.0,
+                        "call_count": 0,
+                        "total_prompt_tokens": 0,
+                        "total_completion_tokens": 0,
+                        "total_cache_creation_tokens": 0,
+                        "total_cache_read_tokens": 0,
+                    }
+                a = self._by_agent[agent]
+                a["total_cost_usd"] += cost.cost_usd
+                a["call_count"] += 1
+                a["total_prompt_tokens"] += cost.prompt_tokens
+                a["total_completion_tokens"] += cost.completion_tokens
+                a["total_cache_creation_tokens"] += cost.cache_creation_tokens
+                a["total_cache_read_tokens"] += cost.cache_read_tokens
+
     def get_summary(self) -> dict[str, Any]:
         with self._lock:
             return {
@@ -65,6 +84,7 @@ class CostTracker:
                 "total_cache_creation_tokens": self._total_cache_creation_tokens,
                 "total_cache_read_tokens": self._total_cache_read_tokens,
                 "by_model": {k: dict(v) for k, v in self._by_model.items()},
+                "by_agent": {k: dict(v) for k, v in self._by_agent.items()},
             }
 
     def reset(self) -> None:
@@ -76,6 +96,7 @@ class CostTracker:
             self._total_cache_creation_tokens = 0
             self._total_cache_read_tokens = 0
             self._by_model.clear()
+            self._by_agent.clear()
 
 
 _default_tracker: CostTracker | None = None
