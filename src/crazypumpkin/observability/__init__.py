@@ -17,6 +17,7 @@ from crazypumpkin.observability.export import (
     MetricsHandler,
     start_metrics_server,
 )
+from crazypumpkin.observability.tracing import LangfuseTracer, get_tracer
 
 __all__ = [
     "agent_call_context",
@@ -30,4 +31,6 @@ __all__ = [
     "format_metrics",
     "MetricsHandler",
     "start_metrics_server",
+    "LangfuseTracer",
+    "get_tracer",
 ]
