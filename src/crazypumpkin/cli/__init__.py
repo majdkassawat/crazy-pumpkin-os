@@ -872,6 +872,54 @@ def cmd_cost(args):
 
 
 @friendly_errors
+def cmd_budgets(args):
+    """List all configured budgets and their current spend."""
+    import json as _json
+    from crazypumpkin.observability.budget import BudgetEnforcer
+
+    enforcer = BudgetEnforcer()
+    budgets = enforcer.get_all_budgets()
+
+    if not budgets:
+        print("No budgets configured.")
+        return
+
+    if getattr(args, "json", False):
+        print(_json.dumps(budgets))
+    else:
+        for name, info in budgets.items():
+            print(
+                f"{name}: ${info['limit_usd']:.2f} limit, "
+                f"${info['current_spend_usd']:.2f} spent, "
+                f"{info['pct_used']}% used"
+            )
+
+
+@friendly_errors
+def cmd_budget_status(args):
+    """Show status for a single named budget."""
+    import json as _json
+    from crazypumpkin.observability.budget import BudgetEnforcer
+
+    enforcer = BudgetEnforcer()
+    try:
+        info = enforcer.check_budget(args.name)
+    except KeyError:
+        print(f"Error: no budget named '{args.name}'")
+        sys.exit(1)
+
+    if getattr(args, "json", False):
+        print(_json.dumps(info))
+    else:
+        exceeded_str = "YES" if info["exceeded"] else "no"
+        print(f"Budget: {info['name']}")
+        print(f"  Limit:    ${info['limit_usd']:.2f}")
+        print(f"  Spent:    ${info['current_spend_usd']:.2f}")
+        print(f"  Used:     {info['pct_used']}%")
+        print(f"  Exceeded: {exceeded_str}")
+
+
+@friendly_errors
 def cmd_config_template(args):
     """Output a default configuration template in YAML or JSON format."""
     import json as _json
