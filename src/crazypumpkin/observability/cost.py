@@ -1,92 +1,129 @@
-"""Cost tracking module — per-agent spend recording with JSONL storage."""
+"""Per-product cost tracking with Langfuse export."""
 
 from __future__ import annotations
 
-import json
-import os
-from dataclasses import asdict, dataclass, field
+import threading
+from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
+
+from crazypumpkin.observability.tracing import get_tracer
 
 
 @dataclass
 class CostRecord:
-    """A single cost record for an LLM call."""
+    """A single LLM call cost record."""
 
     agent_name: str
-    product: str
     model: str
-    input_tokens: int
-    output_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
     cost_usd: float
-    cached_tokens: int = 0
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
-    metadata: Optional[dict] = None
+    product: str = "crazy-pumpkin-os"
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class CostTracker:
-    """Tracks LLM costs in a JSONL file."""
+    """Tracks LLM costs with per-product and per-agent aggregation."""
 
-    def __init__(
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._records: list[CostRecord] = []
+        self._product_spend: dict[str, float] = defaultdict(float)
+        self._agent_spend: dict[str, float] = defaultdict(float)
+        self._product_agent_spend: dict[str, dict[str, float]] = defaultdict(
+            lambda: defaultdict(float)
+        )
+        self._synced_count: int = 0
+
+    def record(
         self,
-        store_path: str = ".cpos/costs.jsonl",
-        base_dir: str | None = None,
-    ) -> None:
-        if base_dir is None:
-            base_dir = os.getcwd()
-        resolved = os.path.abspath(os.path.join(base_dir, store_path))
-        abs_base = os.path.abspath(base_dir)
-        if os.path.commonpath([resolved, abs_base]) != abs_base:
-            raise ValueError(
-                f"store_path escapes base directory: {store_path!r}"
+        agent_name: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cost_usd: float,
+        product: str = "crazy-pumpkin-os",
+    ) -> CostRecord:
+        """Create and store a CostRecord, optionally tracing to Langfuse."""
+        rec = CostRecord(
+            agent_name=agent_name,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=cost_usd,
+            product=product,
+        )
+        with self._lock:
+            self._records.append(rec)
+            self._product_spend[product] += cost_usd
+            self._agent_spend[agent_name] += cost_usd
+            self._product_agent_spend[product][agent_name] += cost_usd
+
+        tracer = get_tracer()
+        if tracer is not None:
+            tracer.trace_llm_call(
+                agent_name=agent_name,
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cost_usd=cost_usd,
+                product=product,
             )
-        self.store_path = resolved
+            with self._lock:
+                self._synced_count = len(self._records)
 
-    def record(self, record: CostRecord) -> None:
-        """Append a cost record to the JSONL store."""
-        parent = os.path.dirname(self.store_path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        with open(self.store_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(record)) + "\n")
+        return rec
 
-    def _load_all(self) -> list[CostRecord]:
-        """Load all records from the JSONL store."""
-        if not os.path.exists(self.store_path):
-            return []
-        records: list[CostRecord] = []
-        with open(self.store_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                data = json.loads(line)
-                records.append(CostRecord(**data))
-        return records
+    def spend_by_product(self) -> dict[str, float]:
+        """Return total USD spend keyed by product name."""
+        with self._lock:
+            return dict(self._product_spend)
 
-    def query(
-        self,
-        agent_name: str | None = None,
-        product: str | None = None,
-        since: str | None = None,
-    ) -> list[CostRecord]:
-        """Query cost records with optional filters."""
-        records = self._load_all()
-        if agent_name is not None:
-            records = [r for r in records if r.agent_name == agent_name]
-        if product is not None:
-            records = [r for r in records if r.product == product]
-        if since is not None:
-            records = [r for r in records if r.timestamp >= since]
-        return records
+    def spend_by_agent(self, product: Optional[str] = None) -> dict[str, float]:
+        """Return total USD spend keyed by agent name, optionally filtered by product."""
+        with self._lock:
+            if product is not None:
+                return dict(self._product_agent_spend.get(product, {}))
+            return dict(self._agent_spend)
 
-    def summary(self, group_by: str = "agent_name") -> dict[str, float]:
-        """Aggregate total cost grouped by a field."""
-        records = self._load_all()
-        totals: dict[str, float] = {}
-        for r in records:
-            key = getattr(r, group_by)
-            totals[key] = totals.get(key, 0.0) + r.cost_usd
-        return totals
+    def total_spend(self) -> float:
+        """Return the sum of all recorded cost_usd values."""
+        with self._lock:
+            return sum(self._product_spend.values())
+
+    def export_to_langfuse(self) -> int:
+        """Send unsynced records to Langfuse. Returns the count of records sent."""
+        tracer = get_tracer()
+        if tracer is None:
+            return 0
+
+        with self._lock:
+            unsynced = self._records[self._synced_count :]
+        for rec in unsynced:
+            tracer.trace_llm_call(
+                agent_name=rec.agent_name,
+                model=rec.model,
+                prompt_tokens=rec.prompt_tokens,
+                completion_tokens=rec.completion_tokens,
+                cost_usd=rec.cost_usd,
+                product=rec.product,
+            )
+        count = len(unsynced)
+        with self._lock:
+            self._synced_count = len(self._records)
+        return count
+
+
+_global_tracker: Optional[CostTracker] = None
+_tracker_lock = threading.Lock()
+
+
+def get_cost_tracker() -> CostTracker:
+    """Return the module-level singleton CostTracker, lazily initialised."""
+    global _global_tracker
+    with _tracker_lock:
+        if _global_tracker is None:
+            _global_tracker = CostTracker()
+        return _global_tracker
