@@ -1,240 +1,236 @@
-"""Tests for the observability cost tracking module."""
+"""Tests for per-product CostTracker and Langfuse export."""
 
 from __future__ import annotations
 
-import json
-import os
+from dataclasses import fields
+from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
 from crazypumpkin.observability.cost import CostRecord, CostTracker
+from crazypumpkin.observability.tracing import (
+    LangfuseTracer,
+    configure_tracer,
+    get_tracer,
+    reset_tracer,
+)
 
 
-# ---------------------------------------------------------------------------
-# CostRecord dataclass
-# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _clean_tracer():
+    """Ensure no global tracer leaks between tests."""
+    reset_tracer()
+    yield
+    reset_tracer()
+
+
+# ── CostRecord dataclass ────────────────────────────────────────────────────
 
 class TestCostRecord:
-    """CostRecord dataclass has all specified fields with correct types."""
-
-    def test_required_fields(self):
+    def test_stores_all_fields(self):
         rec = CostRecord(
-            agent_name="dev",
-            product="chat",
+            agent_name="writer",
             model="gpt-4",
-            input_tokens=100,
-            output_tokens=50,
-            cost_usd=0.005,
+            prompt_tokens=100,
+            completion_tokens=50,
+            cost_usd=0.02,
         )
-        assert rec.agent_name == "dev"
-        assert rec.product == "chat"
+        assert rec.agent_name == "writer"
         assert rec.model == "gpt-4"
-        assert rec.input_tokens == 100
-        assert rec.output_tokens == 50
-        assert rec.cost_usd == 0.005
+        assert rec.prompt_tokens == 100
+        assert rec.completion_tokens == 50
+        assert rec.cost_usd == 0.02
 
-    def test_default_cached_tokens(self):
+    def test_default_product(self):
         rec = CostRecord(
-            agent_name="a", product="p", model="m",
-            input_tokens=0, output_tokens=0, cost_usd=0.0,
+            agent_name="a", model="m", prompt_tokens=0,
+            completion_tokens=0, cost_usd=0.0,
         )
-        assert rec.cached_tokens == 0
+        assert rec.product == "crazy-pumpkin-os"
 
-    def test_default_timestamp_is_iso(self):
+    def test_custom_product(self):
         rec = CostRecord(
-            agent_name="a", product="p", model="m",
-            input_tokens=0, output_tokens=0, cost_usd=0.0,
+            agent_name="a", model="m", prompt_tokens=0,
+            completion_tokens=0, cost_usd=0.0, product="other-product",
         )
-        assert rec.timestamp  # non-empty
-        # Should be parseable as ISO
-        from datetime import datetime
-        datetime.fromisoformat(rec.timestamp)
+        assert rec.product == "other-product"
 
-    def test_default_metadata_is_none(self):
+    def test_timestamp_is_utc_datetime(self):
         rec = CostRecord(
-            agent_name="a", product="p", model="m",
-            input_tokens=0, output_tokens=0, cost_usd=0.0,
+            agent_name="a", model="m", prompt_tokens=0,
+            completion_tokens=0, cost_usd=0.0,
         )
-        assert rec.metadata is None
+        assert isinstance(rec.timestamp, datetime)
+        assert rec.timestamp.tzinfo is not None
 
-    def test_custom_metadata(self):
-        rec = CostRecord(
-            agent_name="a", product="p", model="m",
-            input_tokens=0, output_tokens=0, cost_usd=0.0,
-            metadata={"run_id": "abc"},
-        )
-        assert rec.metadata == {"run_id": "abc"}
+    def test_has_expected_dataclass_fields(self):
+        names = {f.name for f in fields(CostRecord)}
+        expected = {
+            "agent_name", "model", "prompt_tokens",
+            "completion_tokens", "cost_usd", "product", "timestamp",
+        }
+        assert expected == names
 
 
-# ---------------------------------------------------------------------------
-# CostTracker
-# ---------------------------------------------------------------------------
+# ── CostTracker.record() ────────────────────────────────────────────────────
 
 class TestCostTrackerRecord:
-    """CostTracker.record() appends a JSON line to the JSONL file."""
+    def test_record_returns_cost_record(self):
+        tracker = CostTracker()
+        rec = tracker.record("agent-a", "gpt-4", 100, 50, 0.01)
+        assert isinstance(rec, CostRecord)
+        assert rec.agent_name == "agent-a"
+        assert rec.model == "gpt-4"
 
-    def test_record_creates_file_and_appends(self, tmp_path):
-        tracker = CostTracker(store_path="costs.jsonl", base_dir=str(tmp_path))
+    def test_record_stores_entry(self):
+        tracker = CostTracker()
+        tracker.record("a", "m", 10, 5, 0.001)
+        assert tracker.total_spend() == pytest.approx(0.001)
 
-        rec = CostRecord(
-            agent_name="dev", product="chat", model="gpt-4",
-            input_tokens=100, output_tokens=50, cost_usd=0.005,
-        )
-        tracker.record(rec)
+    def test_record_with_custom_product(self):
+        tracker = CostTracker()
+        tracker.record("a", "m", 10, 5, 0.01, product="widget")
+        assert "widget" in tracker.spend_by_product()
 
-        store = str(tmp_path / "costs.jsonl")
-        assert os.path.exists(store)
-        with open(store) as f:
-            lines = f.readlines()
-        assert len(lines) == 1
-        data = json.loads(lines[0])
-        assert data["agent_name"] == "dev"
-        assert data["cost_usd"] == 0.005
+    def test_record_calls_tracer_when_configured(self):
+        mock_client = MagicMock()
+        configure_tracer(mock_client)
+        tracker = CostTracker()
+        tracker.record("a", "m", 10, 5, 0.01)
+        mock_client.generation.assert_called_once()
 
-    def test_record_appends_multiple(self, tmp_path):
-        tracker = CostTracker(store_path="costs.jsonl", base_dir=str(tmp_path))
-
-        for i in range(3):
-            tracker.record(CostRecord(
-                agent_name=f"agent-{i}", product="p", model="m",
-                input_tokens=i, output_tokens=i, cost_usd=float(i),
-            ))
-
-        with open(tmp_path / "costs.jsonl") as f:
-            lines = f.readlines()
-        assert len(lines) == 3
-
-    def test_record_creates_parent_dirs(self, tmp_path):
-        tracker = CostTracker(
-            store_path="sub/dir/costs.jsonl", base_dir=str(tmp_path),
-        )
-        tracker.record(CostRecord(
-            agent_name="a", product="p", model="m",
-            input_tokens=0, output_tokens=0, cost_usd=0.0,
-        ))
-        assert os.path.exists(tmp_path / "sub" / "dir" / "costs.jsonl")
+    def test_record_no_tracer_no_error(self):
+        tracker = CostTracker()
+        rec = tracker.record("a", "m", 10, 5, 0.01)
+        assert rec is not None
 
 
-class TestCostTrackerQuery:
-    """CostTracker.query() returns filtered list of CostRecord objects."""
+# ── spend_by_product() ──────────────────────────────────────────────────────
 
-    @pytest.fixture()
-    def tracker(self, tmp_path):
-        t = CostTracker(store_path="costs.jsonl", base_dir=str(tmp_path))
-        t.record(CostRecord(
-            agent_name="dev", product="chat", model="gpt-4",
-            input_tokens=100, output_tokens=50, cost_usd=0.01,
-            timestamp="2026-01-01T00:00:00+00:00",
-        ))
-        t.record(CostRecord(
-            agent_name="dev", product="code", model="gpt-4",
-            input_tokens=200, output_tokens=100, cost_usd=0.02,
-            timestamp="2026-02-01T00:00:00+00:00",
-        ))
-        t.record(CostRecord(
-            agent_name="qa", product="chat", model="claude-3",
-            input_tokens=50, output_tokens=25, cost_usd=0.005,
-            timestamp="2026-03-01T00:00:00+00:00",
-        ))
-        return t
+class TestSpendByProduct:
+    def test_single_product(self):
+        tracker = CostTracker()
+        tracker.record("a", "m", 10, 5, 0.01)
+        tracker.record("b", "m", 10, 5, 0.02)
+        result = tracker.spend_by_product()
+        assert result == {"crazy-pumpkin-os": pytest.approx(0.03)}
 
-    def test_query_all(self, tracker):
-        results = tracker.query()
-        assert len(results) == 3
-        assert all(isinstance(r, CostRecord) for r in results)
+    def test_multiple_products(self):
+        tracker = CostTracker()
+        tracker.record("a", "m", 10, 5, 0.01, product="alpha")
+        tracker.record("b", "m", 10, 5, 0.02, product="beta")
+        tracker.record("c", "m", 10, 5, 0.03, product="alpha")
+        result = tracker.spend_by_product()
+        assert result["alpha"] == pytest.approx(0.04)
+        assert result["beta"] == pytest.approx(0.02)
 
-    def test_query_by_agent_name(self, tracker):
-        results = tracker.query(agent_name="dev")
-        assert len(results) == 2
-        assert all(r.agent_name == "dev" for r in results)
-
-    def test_query_by_product(self, tracker):
-        results = tracker.query(product="chat")
-        assert len(results) == 2
-        assert all(r.product == "chat" for r in results)
-
-    def test_query_by_since(self, tracker):
-        results = tracker.query(since="2026-02-01T00:00:00+00:00")
-        assert len(results) == 2
-
-    def test_query_combined_filters(self, tracker):
-        results = tracker.query(agent_name="dev", product="chat")
-        assert len(results) == 1
-        assert results[0].cost_usd == 0.01
-
-    def test_query_no_match(self, tracker):
-        results = tracker.query(agent_name="nonexistent")
-        assert results == []
+    def test_empty_tracker(self):
+        tracker = CostTracker()
+        assert tracker.spend_by_product() == {}
 
 
-class TestCostTrackerSummary:
-    """CostTracker.summary() returns correct aggregated totals."""
+# ── spend_by_agent() ────────────────────────────────────────────────────────
 
-    @pytest.fixture()
-    def tracker(self, tmp_path):
-        t = CostTracker(store_path="costs.jsonl", base_dir=str(tmp_path))
-        t.record(CostRecord(
-            agent_name="dev", product="chat", model="gpt-4",
-            input_tokens=100, output_tokens=50, cost_usd=0.01,
-        ))
-        t.record(CostRecord(
-            agent_name="dev", product="code", model="gpt-4",
-            input_tokens=200, output_tokens=100, cost_usd=0.02,
-        ))
-        t.record(CostRecord(
-            agent_name="qa", product="chat", model="claude-3",
-            input_tokens=50, output_tokens=25, cost_usd=0.005,
-        ))
-        return t
+class TestSpendByAgent:
+    def test_all_agents(self):
+        tracker = CostTracker()
+        tracker.record("writer", "m", 10, 5, 0.01)
+        tracker.record("reviewer", "m", 10, 5, 0.02)
+        tracker.record("writer", "m", 10, 5, 0.03)
+        result = tracker.spend_by_agent()
+        assert result["writer"] == pytest.approx(0.04)
+        assert result["reviewer"] == pytest.approx(0.02)
 
-    def test_summary_by_agent_name(self, tracker):
-        result = tracker.summary(group_by="agent_name")
-        assert pytest.approx(result["dev"]) == 0.03
-        assert pytest.approx(result["qa"]) == 0.005
+    def test_filtered_by_product(self):
+        tracker = CostTracker()
+        tracker.record("writer", "m", 10, 5, 0.01, product="alpha")
+        tracker.record("writer", "m", 10, 5, 0.05, product="beta")
+        tracker.record("reviewer", "m", 10, 5, 0.02, product="alpha")
+        result = tracker.spend_by_agent(product="alpha")
+        assert result["writer"] == pytest.approx(0.01)
+        assert result["reviewer"] == pytest.approx(0.02)
+        assert "beta" not in result
 
-    def test_summary_by_product(self, tracker):
-        result = tracker.summary(group_by="product")
-        assert pytest.approx(result["chat"]) == 0.015
-        assert pytest.approx(result["code"]) == 0.02
+    def test_filter_unknown_product(self):
+        tracker = CostTracker()
+        tracker.record("a", "m", 10, 5, 0.01)
+        assert tracker.spend_by_agent(product="nonexistent") == {}
 
-    def test_summary_by_model(self, tracker):
-        result = tracker.summary(group_by="model")
-        assert pytest.approx(result["gpt-4"]) == 0.03
-        assert pytest.approx(result["claude-3"]) == 0.005
+    def test_empty_tracker(self):
+        tracker = CostTracker()
+        assert tracker.spend_by_agent() == {}
 
 
-class TestCostTrackerEmptyStore:
-    """CostTracker works with an empty/nonexistent store file."""
+# ── total_spend() ───────────────────────────────────────────────────────────
 
-    def test_query_nonexistent_file(self, tmp_path):
-        tracker = CostTracker(store_path="nope.jsonl", base_dir=str(tmp_path))
-        assert tracker.query() == []
+class TestTotalSpend:
+    def test_sum_of_all(self):
+        tracker = CostTracker()
+        tracker.record("a", "m", 10, 5, 0.01)
+        tracker.record("b", "m", 10, 5, 0.02)
+        tracker.record("c", "m", 10, 5, 0.03)
+        assert tracker.total_spend() == pytest.approx(0.06)
 
-    def test_summary_nonexistent_file(self, tmp_path):
-        tracker = CostTracker(store_path="nope.jsonl", base_dir=str(tmp_path))
-        assert tracker.summary() == {}
-
-    def test_query_empty_file(self, tmp_path):
-        (tmp_path / "empty.jsonl").write_text("")
-        tracker = CostTracker(store_path="empty.jsonl", base_dir=str(tmp_path))
-        assert tracker.query() == []
+    def test_empty_tracker(self):
+        tracker = CostTracker()
+        assert tracker.total_spend() == 0.0
 
 
-class TestCostTrackerPathTraversal:
-    """CostTracker rejects store_path values that escape base_dir."""
+# ── export_to_langfuse() ────────────────────────────────────────────────────
 
-    def test_rejects_parent_traversal(self, tmp_path):
-        with pytest.raises(ValueError, match="escapes base directory"):
-            CostTracker(store_path="../evil.jsonl", base_dir=str(tmp_path))
+class TestExportToLangfuse:
+    def test_returns_zero_no_tracer(self):
+        tracker = CostTracker()
+        tracker.record("a", "m", 10, 5, 0.01)
+        assert tracker.export_to_langfuse() == 0
 
-    def test_rejects_deep_traversal(self, tmp_path):
-        with pytest.raises(ValueError, match="escapes base directory"):
-            CostTracker(
-                store_path="sub/../../etc/passwd", base_dir=str(tmp_path),
-            )
+    def test_returns_record_count_with_tracer(self):
+        tracker = CostTracker()
+        tracker.record("a", "m", 10, 5, 0.01)
+        tracker.record("b", "m", 10, 5, 0.02)
+        # Now configure tracer and export
+        mock_client = MagicMock()
+        configure_tracer(mock_client)
+        count = tracker.export_to_langfuse()
+        assert count == 2
 
-    def test_allows_subdirectory(self, tmp_path):
-        tracker = CostTracker(
-            store_path="sub/costs.jsonl", base_dir=str(tmp_path),
-        )
-        assert tracker.store_path == os.path.join(str(tmp_path), "sub", "costs.jsonl")
+    def test_does_not_resend_synced_records(self):
+        mock_client = MagicMock()
+        configure_tracer(mock_client)
+        tracker = CostTracker()
+        tracker.record("a", "m", 10, 5, 0.01)
+        tracker.export_to_langfuse()
+        mock_client.generation.reset_mock()
+
+        # Second export with no new records
+        count = tracker.export_to_langfuse()
+        assert count == 0
+        mock_client.generation.assert_not_called()
+
+    def test_sends_only_new_records(self):
+        tracker = CostTracker()
+        tracker.record("a", "m", 10, 5, 0.01)
+        tracker.record("b", "m", 10, 5, 0.02)
+
+        # Configure tracer and export — both records are unsynced
+        mock_client = MagicMock()
+        configure_tracer(mock_client)
+        tracker.export_to_langfuse()
+        mock_client.generation.reset_mock()
+
+        # Add a third record without tracer so it is unsynced
+        reset_tracer()
+        tracker.record("c", "m", 10, 5, 0.03)
+
+        # Re-configure tracer and export — only the new record
+        configure_tracer(mock_client)
+        count = tracker.export_to_langfuse()
+        assert count == 1
+        mock_client.generation.assert_called_once()
+
+    def test_empty_tracker_returns_zero(self):
+        mock_client = MagicMock()
+        configure_tracer(mock_client)
+        tracker = CostTracker()
+        assert tracker.export_to_langfuse() == 0
