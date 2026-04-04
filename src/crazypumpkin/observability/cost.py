@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ class CostTracker:
     """Tracks LLM costs with per-product and per-agent aggregation."""
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._records: list[CostRecord] = []
         self._product_spend: dict[str, float] = defaultdict(float)
         self._agent_spend: dict[str, float] = defaultdict(float)
@@ -53,10 +55,11 @@ class CostTracker:
             cost_usd=cost_usd,
             product=product,
         )
-        self._records.append(rec)
-        self._product_spend[product] += cost_usd
-        self._agent_spend[agent_name] += cost_usd
-        self._product_agent_spend[product][agent_name] += cost_usd
+        with self._lock:
+            self._records.append(rec)
+            self._product_spend[product] += cost_usd
+            self._agent_spend[agent_name] += cost_usd
+            self._product_agent_spend[product][agent_name] += cost_usd
 
         tracer = get_tracer()
         if tracer is not None:
@@ -68,23 +71,27 @@ class CostTracker:
                 cost_usd=cost_usd,
                 product=product,
             )
-            self._synced_count = len(self._records)
+            with self._lock:
+                self._synced_count = len(self._records)
 
         return rec
 
     def spend_by_product(self) -> dict[str, float]:
         """Return total USD spend keyed by product name."""
-        return dict(self._product_spend)
+        with self._lock:
+            return dict(self._product_spend)
 
     def spend_by_agent(self, product: Optional[str] = None) -> dict[str, float]:
         """Return total USD spend keyed by agent name, optionally filtered by product."""
-        if product is not None:
-            return dict(self._product_agent_spend.get(product, {}))
-        return dict(self._agent_spend)
+        with self._lock:
+            if product is not None:
+                return dict(self._product_agent_spend.get(product, {}))
+            return dict(self._agent_spend)
 
     def total_spend(self) -> float:
         """Return the sum of all recorded cost_usd values."""
-        return sum(self._product_spend.values())
+        with self._lock:
+            return sum(self._product_spend.values())
 
     def export_to_langfuse(self) -> int:
         """Send unsynced records to Langfuse. Returns the count of records sent."""
@@ -92,7 +99,8 @@ class CostTracker:
         if tracer is None:
             return 0
 
-        unsynced = self._records[self._synced_count :]
+        with self._lock:
+            unsynced = self._records[self._synced_count :]
         for rec in unsynced:
             tracer.trace_llm_call(
                 agent_name=rec.agent_name,
@@ -103,5 +111,19 @@ class CostTracker:
                 product=rec.product,
             )
         count = len(unsynced)
-        self._synced_count = len(self._records)
+        with self._lock:
+            self._synced_count = len(self._records)
         return count
+
+
+_global_tracker: Optional[CostTracker] = None
+_tracker_lock = threading.Lock()
+
+
+def get_cost_tracker() -> CostTracker:
+    """Return the module-level singleton CostTracker, lazily initialised."""
+    global _global_tracker
+    with _tracker_lock:
+        if _global_tracker is None:
+            _global_tracker = CostTracker()
+        return _global_tracker
