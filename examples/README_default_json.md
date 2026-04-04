@@ -68,3 +68,7 @@ Copy to `config/default.json` in your project root (the framework loads
 All string values support `${VAR_NAME}` syntax. If the variable is set in the
 environment, it is substituted; otherwise the literal `${VAR_NAME}` is kept.
 This lets you keep secrets out of the config file.
+
+## Related Examples
+
+- **[Trigger System](triggers/README.md)** — Expression triggers and cron triggers for scheduling agent execution.
