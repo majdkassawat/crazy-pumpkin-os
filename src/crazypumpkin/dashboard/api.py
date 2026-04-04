@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
+
+from aiohttp import web
 
 if TYPE_CHECKING:
     from crazypumpkin.framework.registry import AgentRegistry
     from crazypumpkin.framework.store import Store
 
 from crazypumpkin.framework.models import AgentStatus, TaskStatus
+from crazypumpkin.llm.base import get_default_tracker
 
 
 _STATUS_BUCKETS = {
@@ -127,3 +131,74 @@ def get_agent_statuses(registry: "AgentRegistry") -> list[dict]:
             "health": health,
         })
     return result
+
+
+def _check_auth(request: web.Request) -> web.Response | None:
+    """Return a 401 Response if auth is required but missing/invalid, else None."""
+    token = request.app.get("dashboard_api_token")
+    if not token:
+        return None
+    auth = request.headers.get("Authorization", "")
+    if auth == f"Bearer {token}":
+        return None
+    return web.json_response({"error": "Unauthorized"}, status=401)
+
+
+async def get_agents_status(request: web.Request) -> web.Response:
+    """Return JSON array of agent status objects with id, name, role, status, last_active, current_task."""
+    err = _check_auth(request)
+    if err is not None:
+        return err
+    registry: AgentRegistry = request.app["registry"]
+    store: Store = request.app["store"]
+
+    agents = []
+    for agent in registry._agents.values():
+        status_val = (
+            agent.agent.status.value
+            if hasattr(agent.agent.status, "value")
+            else str(agent.agent.status)
+        )
+        last_active = getattr(agent.agent, "last_heartbeat", None) or ""
+        current_task = ""
+        for task in store.tasks.values():
+            if task.assigned_to == agent.id and task.status.value == "in_progress":
+                current_task = task.title
+                break
+        agents.append({
+            "id": agent.id,
+            "name": agent.name,
+            "role": agent.role.value if hasattr(agent.role, "value") else str(agent.role),
+            "status": status_val,
+            "last_active": last_active,
+            "current_task": current_task,
+        })
+
+    return web.json_response(agents)
+
+
+async def get_cost_summary(request: web.Request) -> web.Response:
+    """Return JSON cost breakdown from CostTracker.get_summary() with per-agent and per-model detail."""
+    err = _check_auth(request)
+    if err is not None:
+        return err
+    store: Store = request.app["store"]
+    tracker = get_default_tracker()
+    summary = tracker.get_summary()
+
+    by_agent: dict[str, float] = {}
+    for m in store._agent_metrics.values():
+        label = m.agent_name or m.agent_id
+        by_agent[label] = m.budget_spent_usd
+
+    return web.json_response({
+        "total_cost_usd": summary["total_cost_usd"],
+        "by_model": summary.get("by_model", {}),
+        "by_agent": by_agent,
+    })
+
+
+def setup_routes(app: web.Application) -> None:
+    """Register dashboard API routes on the given aiohttp application."""
+    app.router.add_get("/api/agents/status", get_agents_status)
+    app.router.add_get("/api/cost/summary", get_cost_summary)
