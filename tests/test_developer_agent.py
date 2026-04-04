@@ -36,8 +36,8 @@ def _make_task(
 
 
 def _fake_response(text: str = "Done."):
-    block = SimpleNamespace(text=text)
-    return SimpleNamespace(content=[block])
+    block = SimpleNamespace(type="text", text=text)
+    return SimpleNamespace(content=[block], stop_reason="end_turn")
 
 
 # ---------------------------------------------------------------------------

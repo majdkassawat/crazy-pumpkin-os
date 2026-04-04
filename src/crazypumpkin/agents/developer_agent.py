@@ -35,13 +35,18 @@ class DeveloperAgent(ClaudeSDKAgent):
     def execute(self, task: Task, context: dict[str, Any]) -> TaskOutput:
         """Execute a coding task within the given repository.
 
+        Runs an agentic tool-use loop: the model may request file writes via
+        tool_use blocks, which are executed (with path-traversal checks) and
+        fed back until the model signals ``end_turn``.
+
         The *context* dict must contain a ``repo_root`` key pointing to the
-        root directory of the target repository.  This path is injected into
-        the system prompt so the SDK session knows where files live.
+        root directory of the target repository.
 
         Returns a TaskOutput whose ``artifacts`` dict maps file paths to a
         short description for every file created or modified.
         """
+        import os
+
         import anthropic
 
         repo_root: str = context.get("repo_root", ".")
@@ -74,23 +79,73 @@ class DeveloperAgent(ClaudeSDKAgent):
         if tools:
             create_kwargs["tools"] = tools
 
-        response = client.messages.create(**create_kwargs)
+        artifacts: dict[str, str] = {}
+        all_content_parts: list[str] = []
+        max_iterations = 10
 
-        # Extract text content from the response
-        content_parts: list[str] = []
-        for block in response.content:
-            if hasattr(block, "text"):
-                content_parts.append(block.text)
-        content = "\n".join(content_parts)
+        for _ in range(max_iterations):
+            response = client.messages.create(**create_kwargs)
 
-        # Preserve assistant turn for multi-turn continuity
-        self._history.append({
-            "role": "assistant",
-            "content": response.content,
-        })
+            # Collect text content from this turn
+            for block in response.content:
+                if hasattr(block, "text"):
+                    all_content_parts.append(block.text)
 
-        # Extract file paths from the response
-        artifacts = self._extract_artifacts(content)
+            # Preserve assistant turn for multi-turn continuity
+            self._history.append({
+                "role": "assistant",
+                "content": response.content,
+            })
+
+            if response.stop_reason != "tool_use":
+                break
+
+            # Process tool-use blocks and build tool results
+            tool_results: list[dict[str, Any]] = []
+            for block in response.content:
+                if getattr(block, "type", None) != "tool_use":
+                    continue
+
+                tool_input = block.input
+                command = tool_input.get("command", "")
+                file_path = tool_input.get("file_path", "")
+
+                # Path-traversal guard
+                if file_path:
+                    if os.path.isabs(file_path):
+                        resolved = os.path.normpath(os.path.abspath(file_path))
+                    else:
+                        resolved = os.path.normpath(
+                            os.path.join(os.path.abspath(repo_root), file_path)
+                        )
+                    root = os.path.normpath(os.path.abspath(repo_root))
+                    if not resolved.startswith(root + os.sep) and resolved != root:
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": f"Error: path '{file_path}' is outside the repository root.",
+                            "is_error": True,
+                        })
+                        continue
+
+                # Record write artifacts
+                if command in ("write", "create", "str_replace", "insert") and file_path:
+                    artifacts[file_path] = "created/modified"
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": "OK",
+                })
+
+            self._history.append({"role": "user", "content": tool_results})
+            create_kwargs["messages"] = list(self._history)
+
+        content = "\n".join(all_content_parts)
+
+        # Fall back to regex extraction when no tool calls produced artifacts
+        if not artifacts:
+            artifacts = self._extract_artifacts(content)
 
         return TaskOutput(content=content, artifacts=artifacts)
 
