@@ -645,15 +645,14 @@ def cmd_remove_plugin(args):
 def cmd_plugins_list(args):
     """Discover and display all plugins with source and status info."""
     from crazypumpkin.framework.plugin_loader import (
-        PluginLoader,
-        discover_entrypoint_plugins,
+        discover_entry_point_plugins,
+        load_plugins,
     )
 
-    loader = PluginLoader()
-    ep_plugins = discover_entrypoint_plugins()
+    ep_plugins = discover_entry_point_plugins()
     ep_names = {p.name for p in ep_plugins}
 
-    plugins = loader.plugins
+    plugins = load_plugins()
 
     header = f"{'Name':<30} {'Version':<12} {'Source':<15} {'Status'}"
     print(header)
@@ -787,11 +786,13 @@ def cli():
 @click.option("--config", "config_path", default=None, type=click.Path())
 @click.option("--param", multiple=True)
 @click.option("--timeout", default=300, type=int)
-def cli_run(agent_name, config_path, param, timeout):
+@click.option("--watch", "-w", is_flag=True, default=False, help="Watch config file and hot-reload on changes")
+def cli_run(agent_name, config_path, param, timeout, watch):
     """Run a single agent by name."""
     import concurrent.futures
 
-    from crazypumpkin.framework.config import load_config
+    from crazypumpkin.config.watcher import ConfigWatcher
+    from crazypumpkin.framework.config import PipelineConfig, load_config
     from crazypumpkin.framework.registry import AgentRegistry
 
     logger = logging.getLogger('crazypumpkin.cli')
@@ -807,9 +808,15 @@ def cli_run(agent_name, config_path, param, timeout):
 
     logger.debug('Params: %s', params)
 
-    # Load config from custom path
+    # Resolve config file path
     if config_path:
-        load_config(Path(config_path).parent)
+        resolved_config_path = Path(config_path).resolve()
+        load_config(resolved_config_path.parent)
+    else:
+        resolved_config_path = (Path.cwd() / "config.yaml").resolve()
+
+    # Build PipelineConfig for hot-reload
+    pipeline_config = PipelineConfig()
 
     # Resolve agent by name
     logger.info('Resolving agent: %s', agent_name)
@@ -824,10 +831,21 @@ def cli_run(agent_name, config_path, param, timeout):
 
     logger.info('Agent resolved: %s (class=%s)', agent_name, type(agent).__module__ + '.' + type(agent).__qualname__)
 
+    # Set up config watcher if --watch is enabled
+    watcher = None
+    if watch:
+        watcher = ConfigWatcher(
+            config_path=resolved_config_path,
+            on_reload=lambda new_dict: pipeline_config.apply_reload(new_dict),
+        )
+        logger.info('Config hot-reload enabled, watching %s', resolved_config_path)
+
     # Execute with timeout
     click.echo(f"Running agent '{agent_name}' ...")
     start = time.time()
     try:
+        if watcher is not None:
+            watcher.start()
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(agent.run, params)
             result = future.result(timeout=timeout)
@@ -844,6 +862,197 @@ def cli_run(agent_name, config_path, param, timeout):
         logger.info('Agent finished in %.2fs', duration)
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
+    finally:
+        if watcher is not None:
+            watcher.stop()
+
+
+@cli.group("plugin")
+def plugin_group():
+    """Plugin discovery and inspection."""
+
+
+@plugin_group.command("list")
+def plugin_list_cmd():
+    """List all discovered plugins with source and status."""
+    from crazypumpkin.framework.plugin_loader import (
+        discover_entry_point_plugins,
+        load_plugins,
+    )
+
+    ep_plugins = discover_entry_point_plugins()
+    ep_names = {p.name for p in ep_plugins}
+
+    all_plugins = load_plugins()
+
+    if not all_plugins:
+        click.echo("No plugins found.")
+        return
+
+    header = f"{'Name':<30} {'Version':<12} {'Source':<15} {'Status'}"
+    click.echo(header)
+    click.echo("-" * len(header))
+
+    for p in all_plugins:
+        version = p.version or "unknown"
+        source = "entrypoint" if p.name in ep_names else "directory"
+        status = "ok" if p.entry_point else "error"
+        click.echo(f"{p.name:<30} {version:<12} {source:<15} {status}")
+
+
+@plugin_group.command("info")
+@click.argument("name")
+def plugin_info_cmd(name):
+    """Show full manifest details for a named plugin as YAML."""
+    import yaml
+
+    from crazypumpkin.framework.plugin_loader import (
+        discover_entry_point_plugins,
+        load_plugins,
+    )
+
+    all_plugins = load_plugins()
+    match = None
+    for p in all_plugins:
+        if p.name == name:
+            match = p
+            break
+
+    if match is None:
+        click.echo(f"Error: plugin '{name}' not found.", err=True)
+        sys.exit(1)
+
+    ep_plugins = discover_entry_point_plugins()
+    ep_names = {p.name for p in ep_plugins}
+
+    manifest_dict = {
+        "name": match.name,
+        "version": match.version or "unknown",
+        "description": match.description or "",
+        "entry_point": match.entry_point,
+        "plugin_type": match.plugin_type or "",
+        "source": "entrypoint" if match.name in ep_names else "directory",
+        "agents": getattr(match, "agents", []) or [],
+        "hooks": getattr(match, "hooks", []) or [],
+    }
+
+    click.echo(yaml.dump(manifest_dict, default_flow_style=False, sort_keys=False).rstrip())
+
+
+@cli.command("sessions")
+@click.option("--agent", default="", help="Filter by agent ID")
+def sessions_cmd(agent: str) -> None:
+    """List active multi-turn sessions."""
+    from crazypumpkin.framework.store import Store
+
+    store = Store()
+    store.load()
+    sessions = store.list_sessions(agent_id=agent)
+
+    header = f"{'session_id':<38} {'agent_id':<20} {'messages_count':<16} {'created_at':<26} {'updated_at'}"
+    click.echo(header)
+    click.echo("-" * len(header))
+    for s in sessions:
+        click.echo(
+            f"{s.session_id:<38} {s.agent_id:<20} {len(s.messages):<16} {s.created_at:<26} {s.updated_at}"
+        )
+
+
+@cli.group("session")
+def session_group() -> None:
+    """Manage multi-turn agent sessions."""
+
+
+@session_group.command("list")
+@click.option("--agent", default=None, help="Filter by agent name")
+@click.option("--status", default=None, help="Filter by session status")
+def session_list_cmd(agent: str | None, status: str | None) -> None:
+    """List sessions as a table."""
+    from crazypumpkin.framework.session import SessionStore
+    from crazypumpkin.framework.store import Store
+
+    import asyncio
+
+    store = Store()
+    store.load()
+    ss = SessionStore(store)
+
+    sessions = asyncio.get_event_loop().run_until_complete(
+        ss.list_sessions(agent_name=agent, status=status)
+    )
+
+    header = f"{'id':<34} {'agent':<20} {'status':<12} {'turns':<8} {'created_at'}"
+    click.echo(header)
+    click.echo("-" * len(header))
+    for s in sessions:
+        click.echo(
+            f"{s.session_id:<34} {s.agent_name:<20} {s.status:<12} {len(s.messages):<8} {s.created_at}"
+        )
+
+
+@session_group.command("show")
+@click.argument("session_id")
+def session_show_cmd(session_id: str) -> None:
+    """Print full session with all messages."""
+    from crazypumpkin.framework.session import SessionStore
+    from crazypumpkin.framework.store import Store
+
+    import asyncio
+
+    store = Store()
+    store.load()
+    ss = SessionStore(store)
+
+    session = asyncio.get_event_loop().run_until_complete(ss.get(session_id))
+    if session is None:
+        click.echo(f"Error: session '{session_id}' not found.", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Session: {session.session_id}")
+    click.echo(f"Agent:   {session.agent_name}")
+    click.echo(f"Status:  {session.status}")
+    click.echo(f"Turns:   {len(session.messages)}")
+    click.echo(f"Created: {session.created_at}")
+    click.echo("")
+    for msg in session.messages:
+        click.echo(f"[{msg.timestamp}] {msg.role}: {msg.content}")
+
+
+@session_group.command("close")
+@click.argument("session_id")
+def session_close_cmd(session_id: str) -> None:
+    """Close an active session."""
+    from crazypumpkin.framework.session import SessionStore
+    from crazypumpkin.framework.store import Store
+
+    import asyncio
+
+    store = Store()
+    store.load()
+    ss = SessionStore(store)
+
+    try:
+        session = asyncio.get_event_loop().run_until_complete(ss.close(session_id))
+    except KeyError:
+        click.echo(f"Error: session '{session_id}' not found.", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Session '{session_id}' closed.")
+
+
+@cli.command("session-delete")
+@click.argument("session_id")
+def session_delete_cmd(session_id: str) -> None:
+    """Delete a multi-turn session."""
+    from crazypumpkin.framework.store import Store
+
+    store = Store()
+    store.load()
+    found = store.delete_session(session_id)
+    if found:
+        click.echo(f"Session '{session_id}' deleted.")
+    else:
+        click.echo(f"Session '{session_id}' not found.")
 
 
 @friendly_errors

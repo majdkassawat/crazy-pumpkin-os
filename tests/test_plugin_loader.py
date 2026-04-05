@@ -183,6 +183,14 @@ class TestDiscoverEntryPoints:
         empty_dir = tmp_path / "empty_plugins"
         empty_dir.mkdir()
 
+        mod1 = types.ModuleType("myplugin.core")
+        mod1.plugin_manifest = {"name": "myplugin", "version": "1.0.0", "agent_class": "Agent"}
+        mod2 = types.ModuleType("other.mod")
+        mod2.plugin_manifest = {"name": "other", "version": "1.0.0", "agent_class": "Plugin"}
+
+        def _import(name):
+            return {"myplugin.core": mod1, "other.mod": mod2}[name]
+
         with patch(
             "crazypumpkin.framework.plugin_loader.sys"
         ) as mock_sys:
@@ -190,7 +198,8 @@ class TestDiscoverEntryPoints:
             with patch(
                 "importlib.metadata.entry_points", return_value=eps
             ):
-                result = discover_plugins(plugins_dir=empty_dir)
+                with patch("importlib.import_module", side_effect=_import):
+                    result = discover_plugins(plugins_dir=empty_dir)
 
         names = [m.name for m in result]
         assert "myplugin" in names

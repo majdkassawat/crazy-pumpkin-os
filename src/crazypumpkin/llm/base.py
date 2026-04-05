@@ -5,6 +5,21 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+from crazypumpkin.observability.budget import BudgetEnforcer
+
+_default_enforcer: BudgetEnforcer | None = None
+
+
+def get_default_enforcer() -> BudgetEnforcer | None:
+    """Return the module-level BudgetEnforcer singleton, or None if not set."""
+    return _default_enforcer
+
+
+def set_default_enforcer(enforcer: BudgetEnforcer) -> None:
+    """Set the module-level BudgetEnforcer singleton."""
+    global _default_enforcer
+    _default_enforcer = enforcer
+
 
 @dataclass
 class CallCost:
@@ -29,8 +44,9 @@ class CostTracker:
         self._total_cache_read_tokens: int = 0
         self._by_model: dict[str, dict[str, Any]] = {}
         self._by_agent: dict[str, dict[str, Any]] = {}
+        self._by_product: dict[str, dict[str, Any]] = {}
 
-    def record(self, model: str, cost: CallCost, *, agent: str | None = None) -> None:
+    def record(self, model: str, cost: CallCost, *, agent: str | None = None, product_id: str | None = None) -> None:
         with self._lock:
             self._total_cost_usd += cost.cost_usd
             self._call_count += 1
@@ -74,6 +90,25 @@ class CostTracker:
                 a["total_cache_creation_tokens"] += cost.cache_creation_tokens
                 a["total_cache_read_tokens"] += cost.cache_read_tokens
 
+            if product_id is not None:
+                if product_id not in self._by_product:
+                    self._by_product[product_id] = {
+                        "total_cost_usd": 0.0,
+                        "call_count": 0,
+                        "total_prompt_tokens": 0,
+                        "total_completion_tokens": 0,
+                    }
+                p = self._by_product[product_id]
+                p["total_cost_usd"] += cost.cost_usd
+                p["call_count"] += 1
+                p["total_prompt_tokens"] += cost.prompt_tokens
+                p["total_completion_tokens"] += cost.completion_tokens
+
+    def get_summary_by_product(self) -> dict[str, dict]:
+        """Return per-product cost summary: {product_id: {total_cost_usd, call_count, total_prompt_tokens, total_completion_tokens}}."""
+        with self._lock:
+            return {k: dict(v) for k, v in self._by_product.items()}
+
     def get_summary(self) -> dict[str, Any]:
         with self._lock:
             return {
@@ -97,6 +132,7 @@ class CostTracker:
             self._total_cache_read_tokens = 0
             self._by_model.clear()
             self._by_agent.clear()
+            self._by_product.clear()
 
 
 _default_tracker: CostTracker | None = None
@@ -127,6 +163,7 @@ class LLMProvider(ABC):
         system: str | None = None,
         cache: bool = True,
         agent: str | None = None,
+        product_id: str | None = None,
     ) -> str: ...
 
     @abstractmethod
@@ -144,5 +181,6 @@ class LLMProvider(ABC):
         system: str | None = None,
         cache: bool = True,
         agent: str | None = None,
+        product_id: str | None = None,
     ) -> str:
         """Run an agentic conversation loop until the model stops issuing tool calls or *max_turns* is reached."""

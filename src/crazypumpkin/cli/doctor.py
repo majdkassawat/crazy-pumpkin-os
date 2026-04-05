@@ -57,6 +57,34 @@ def _check_config() -> tuple[bool, str]:
         return False, f"config invalid: {exc}"
 
 
+def _check_tracing() -> tuple[bool, str]:
+    """Check Langfuse tracing connectivity when tracing is enabled."""
+    try:
+        from crazypumpkin.framework.config import load_config
+        cfg = load_config()
+    except Exception:
+        return False, "tracing: cannot load config"
+
+    if not cfg.tracing.enabled:
+        return True, "tracing: disabled (skipped)"
+
+    if not cfg.tracing.public_key or not cfg.tracing.secret_key:
+        return False, "tracing: enabled but missing public_key or secret_key"
+
+    try:
+        import httpx
+        resp = httpx.get(
+            f"{cfg.tracing.host}/api/public/health",
+            timeout=5,
+            headers={"Authorization": f"Bearer {cfg.tracing.public_key}"},
+        )
+        if resp.status_code < 500:
+            return True, "tracing: Langfuse reachable"
+        return False, f"tracing: Langfuse returned {resp.status_code}"
+    except Exception as exc:
+        return False, f"tracing: Langfuse unreachable ({exc})"
+
+
 @friendly_errors
 def cmd_doctor(args) -> None:
     """Run environment health checks and print results."""
@@ -76,6 +104,12 @@ def cmd_doctor(args) -> None:
 
     # Config
     ok, msg = _check_config()
+    _print_check(ok, msg)
+    if not ok:
+        all_passed = False
+
+    # Tracing
+    ok, msg = _check_tracing()
     _print_check(ok, msg)
     if not ok:
         all_passed = False

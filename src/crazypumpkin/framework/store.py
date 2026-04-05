@@ -16,7 +16,7 @@ from typing import Any
 from crazypumpkin.framework.models import (
     Agent, AgentConfig, AgentMetrics, Approval, ApprovalStatus, ChangeProposal,
     Project, ProjectStatus, ProposalStatus, ProposalType, Review,
-    ReviewDecision, RunRecord, Task, TaskOutput, TaskStatus,
+    ReviewDecision, RunRecord, SessionRecord, Task, TaskOutput, TaskStatus,
 )
 
 
@@ -46,6 +46,7 @@ class Store:
         self.proposals: dict[str, ChangeProposal] = {}
         self._agent_metrics: dict[str, AgentMetrics] = {}
         self._run_history: dict[str, RunRecord] = {}
+        self._sessions: dict[str, SessionRecord] = {}
         self._data_dir = data_dir
         if data_dir:
             data_dir.mkdir(parents=True, exist_ok=True)
@@ -622,3 +623,55 @@ class Store:
 
         records.sort(key=lambda r: r.started_at, reverse=True)
         return records[offset:offset + limit]
+
+    # ── Sessions ──
+
+    def save_session(self, session: SessionRecord) -> None:
+        """Store a session in memory and persist to disk if data_dir is set."""
+        self._sessions[session.session_id] = session
+        if self._data_dir:
+            sessions_dir = self._data_dir / "sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            path = sessions_dir / f"{session.session_id}.json"
+            path.write_text(
+                json.dumps(_to_dict(session), indent=2), encoding="utf-8"
+            )
+
+    def load_session(self, session_id: str) -> SessionRecord | None:
+        """Return a session from memory or load from disk."""
+        if session_id in self._sessions:
+            return self._sessions[session_id]
+        if self._data_dir:
+            path = self._data_dir / "sessions" / f"{session_id}.json"
+            if path.exists():
+                d = json.loads(path.read_text(encoding="utf-8"))
+                rec = SessionRecord(
+                    session_id=d.get("session_id", ""),
+                    agent_id=d.get("agent_id", ""),
+                    messages=d.get("messages", []),
+                    created_at=d.get("created_at", ""),
+                    updated_at=d.get("updated_at", ""),
+                    metadata=d.get("metadata", {}),
+                )
+                self._sessions[session_id] = rec
+                return rec
+        return None
+
+    def list_sessions(self, agent_id: str = "") -> list[SessionRecord]:
+        """Return all sessions, optionally filtered by agent_id."""
+        sessions = list(self._sessions.values())
+        if agent_id:
+            sessions = [s for s in sessions if s.agent_id == agent_id]
+        return sessions
+
+    def delete_session(self, session_id: str) -> bool:
+        """Remove a session from memory and disk. Returns True if it existed."""
+        found = session_id in self._sessions
+        if found:
+            del self._sessions[session_id]
+        if self._data_dir:
+            path = self._data_dir / "sessions" / f"{session_id}.json"
+            if path.exists():
+                path.unlink()
+                found = True
+        return found

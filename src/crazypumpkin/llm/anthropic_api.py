@@ -6,7 +6,7 @@ from typing import Any
 
 from anthropic import Anthropic
 
-from crazypumpkin.llm.base import CallCost, LLMProvider
+from crazypumpkin.llm.base import CallCost, LLMProvider, get_default_tracker
 from crazypumpkin.observability.metrics import record_cache_event
 
 PRICING: dict[str, dict[str, float]] = {
@@ -104,6 +104,7 @@ class AnthropicProvider(LLMProvider):
         system: str | None = None,
         cache: bool = True,
         agent: str | None = None,
+        product_id: str | None = None,
     ) -> str:
         resolved = self._resolve_model(model)
         kwargs: dict = {
@@ -119,6 +120,23 @@ class AnthropicProvider(LLMProvider):
             kwargs["tools"] = tools
         response = self._client.messages.create(**kwargs)
         self._record_cache_from_usage(response)
+
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            input_tokens = getattr(usage, "input_tokens", 0) or 0
+            output_tokens = getattr(usage, "output_tokens", 0) or 0
+            cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+            cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+            cost_usd = _compute_cost(resolved, input_tokens, output_tokens)
+            call_cost = CallCost(
+                prompt_tokens=input_tokens,
+                completion_tokens=output_tokens,
+                cost_usd=cost_usd,
+                cache_creation_tokens=cache_creation,
+                cache_read_tokens=cache_read,
+            )
+            get_default_tracker().record(resolved, call_cost, agent=agent, product_id=product_id)
+
         parts = [block.text for block in response.content if block.type == "text"]
         return "\n".join(parts)
 
@@ -145,11 +163,11 @@ class AnthropicProvider(LLMProvider):
         response = self._client.messages.create(**kwargs)
         self._record_cache_from_usage(response)
 
-        usage = response.usage
-        input_tokens = getattr(usage, "input_tokens", 0) or 0
-        output_tokens = getattr(usage, "output_tokens", 0) or 0
-        cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
-        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        usage = getattr(response, "usage", None)
+        input_tokens = (getattr(usage, "input_tokens", 0) or 0) if usage else 0
+        output_tokens = (getattr(usage, "output_tokens", 0) or 0) if usage else 0
+        cache_creation = (getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
+        cache_read = (getattr(usage, "cache_read_input_tokens", 0) or 0) if usage else 0
 
         cost_usd = _compute_cost(resolved, input_tokens, output_tokens)
         parts = [block.text for block in response.content if block.type == "text"]
@@ -197,6 +215,7 @@ class AnthropicProvider(LLMProvider):
         system: str | None = None,
         cache: bool = True,
         agent: str | None = None,
+        product_id: str | None = None,
     ) -> str:
         """Run an agentic conversation loop until the model stops issuing tool calls or *max_turns* is reached.
 

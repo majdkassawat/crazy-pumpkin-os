@@ -20,6 +20,14 @@ class HealthReport:
     )
     details: dict[str, Any] = field(default_factory=dict)
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "message": self.message,
+            "timestamp": self.timestamp,
+            "details": self.details,
+        }
+
 
 @dataclass
 class SystemHealth:
@@ -82,6 +90,19 @@ def check_agent_health(agent: Agent) -> HealthReport:
         message=f"Agent is misconfigured: {'; '.join(issues)}",
         details={"agent_id": agent.id, "issues": issues},
     )
+
+
+class HealthChecker:
+    """Async health checker that runs check_agent_health across registered agents."""
+
+    def __init__(self) -> None:
+        self._agents: list[Agent] = []
+
+    def register(self, agent: Agent) -> None:
+        self._agents.append(agent)
+
+    async def check_all(self) -> list[HealthReport]:
+        return [check_agent_health(a) for a in self._agents]
 
 
 def aggregate_health(reports: list[HealthReport]) -> SystemHealth:

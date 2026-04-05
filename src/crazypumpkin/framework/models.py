@@ -362,9 +362,11 @@ class PluginManifest:
     """Descriptor for a discovered plugin."""
     name: str = ""
     version: str = ""
+    agent_class: str = ""
     description: str = ""
     entry_point: str = ""
     plugin_type: str = ""  # "agent" or "provider"
+    config_schema: dict[str, Any] | None = None
     min_framework_version: str = ""
     permissions: list[str] = field(default_factory=list)
     requires: list[str] = field(default_factory=list)
@@ -382,3 +384,38 @@ class RunRecord:
     status: str = "pending"  # "pending", "success", "failure"
     duration_ms: float | None = None
     error: str | None = None
+
+
+@dataclass
+class SessionRecord:
+    """Persisted multi-turn conversation session."""
+    session_id: str = field(default_factory=_uid)
+    agent_id: str = ""
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    created_at: str = field(default_factory=_now)
+    updated_at: str = field(default_factory=_now)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+# ── Multi-turn Session ──────────────────────────────────────────────
+
+@dataclass
+class SessionMessage:
+    """Single message in a session."""
+    role: str = ""  # 'user', 'assistant', 'system'
+    content: str = ""
+    timestamp: str = field(default_factory=_now)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Session:
+    """Multi-turn agent session with conversation history."""
+    session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    agent_name: str = ""
+    messages: list[SessionMessage] = field(default_factory=list)
+    context: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=_now)
+    updated_at: str = field(default_factory=_now)
+    max_turns: int = 50
+    status: str = "active"  # active, completed, expired

@@ -123,6 +123,20 @@ def get_llm_cost_snapshot() -> dict[str, Any]:
     }
 
 
+def get_cost_by_product_snapshot() -> dict[str, Any]:
+    """Return a snapshot of per-product LLM cost data from the default tracker.
+
+    Returns:
+        A dict with product_id keys mapping to cost dicts containing
+        ``total_cost_usd``, ``call_count``, ``total_prompt_tokens``,
+        and ``total_completion_tokens``.
+    """
+    from crazypumpkin.llm.base import get_default_tracker
+
+    tracker = get_default_tracker()
+    return tracker.get_summary_by_product()
+
+
 def get_metrics_snapshot() -> dict[str, Any]:
     """Return a point-in-time snapshot of all tracked metrics.
 
@@ -133,6 +147,8 @@ def get_metrics_snapshot() -> dict[str, Any]:
         * ``errors`` – total errors recorded.
         * ``errors_by_type`` – ``{error_type: count}`` breakdown.
         * ``agent_uptime`` – ``{agent_id: seconds}`` for every tracked agent.
+        * ``llm_costs`` – aggregate LLM cost snapshot.
+        * ``llm_costs_by_product`` – per-product LLM cost breakdown.
     """
     now = time.monotonic()
     with _lock:
@@ -144,6 +160,8 @@ def get_metrics_snapshot() -> dict[str, Any]:
                 aid: now - start
                 for aid, start in _agent_start_times.items()
             },
+            "llm_costs": get_llm_cost_snapshot(),
+            "llm_costs_by_product": get_cost_by_product_snapshot(),
         }
 
 

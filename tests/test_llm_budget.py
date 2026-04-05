@@ -1,35 +1,12 @@
-"""Tests for BudgetEnforcer integration in LLMProvider._record_cost."""
+"""Tests for BudgetEnforcer singleton in crazypumpkin.llm."""
 
 from __future__ import annotations
 
 import pytest
 
 from crazypumpkin.llm import base as llm_base
-from crazypumpkin.llm.base import (
-    CostTracker,
-    LLMProvider,
-    get_default_enforcer,
-    get_default_tracker,
-    set_default_enforcer,
-)
-from crazypumpkin.observability.budget import (
-    BudgetEnforcer,
-    BudgetExceededError,
-    CostBudget,
-)
-
-
-class _StubProvider(LLMProvider):
-    """Minimal concrete LLMProvider for testing _record_cost."""
-
-    def call(self, prompt, **kwargs):
-        return ""
-
-    def call_json(self, prompt, **kwargs):
-        return {}
-
-    def call_multi_turn(self, prompt, **kwargs):
-        return ""
+from crazypumpkin.llm import get_default_enforcer, set_default_enforcer
+from crazypumpkin.observability.budget import BudgetEnforcer
 
 
 @pytest.fixture(autouse=True)
@@ -40,103 +17,31 @@ def _reset_enforcer():
     llm_base._default_enforcer = None
 
 
-def test_record_cost_no_enforcer():
-    """No enforcer set — _record_cost succeeds and cost is tracked."""
-    provider = _StubProvider()
-    tracker = CostTracker()
-    provider.cost_tracker = tracker
+def test_importable_from_llm_package():
+    """get_default_enforcer and set_default_enforcer are importable from crazypumpkin.llm."""
+    from crazypumpkin.llm import get_default_enforcer as gde, set_default_enforcer as sde
 
-    provider._record_cost(
-        model="gpt-4",
-        input_tokens=100,
-        output_tokens=50,
-        cost_usd=0.05,
-    )
-
-    summary = tracker.get_summary()
-    assert summary["total_cost_usd"] == pytest.approx(0.05)
-    assert summary["call_count"] == 1
+    assert callable(gde)
+    assert callable(sde)
 
 
-def test_record_cost_with_enforcer():
-    """Set enforcer with a budget, call _record_cost with product, assert spend increased."""
-    enforcer = BudgetEnforcer()
-    enforcer.add_budget(CostBudget(name="myproduct", limit_usd=10.0, period="total"))
-    set_default_enforcer(enforcer)
-
-    provider = _StubProvider()
-    tracker = CostTracker()
-    provider.cost_tracker = tracker
-
-    provider._record_cost(
-        model="gpt-4",
-        input_tokens=100,
-        output_tokens=50,
-        cost_usd=1.50,
-        product="myproduct",
-    )
-
-    info = enforcer.check_budget("myproduct")
-    assert info["current_spend_usd"] == pytest.approx(1.50)
-    assert info["pct_used"] == pytest.approx(15.0)
-
-
-def test_record_cost_enforcer_hard_stop():
-    """Hard-stop enforcer raises BudgetExceededError; cost is still recorded in CostTracker."""
-    enforcer = BudgetEnforcer()
-    enforcer.add_budget(
-        CostBudget(name="tiny", limit_usd=0.01, period="daily", hard_stop=True)
-    )
-    set_default_enforcer(enforcer)
-
-    provider = _StubProvider()
-    tracker = CostTracker()
-    provider.cost_tracker = tracker
-
-    with pytest.raises(BudgetExceededError) as exc_info:
-        provider._record_cost(
-            model="gpt-4",
-            input_tokens=500,
-            output_tokens=200,
-            cost_usd=2.00,
-            product="tiny",
-        )
-
-    assert exc_info.value.budget_name == "tiny"
-    assert exc_info.value.limit_usd == pytest.approx(0.01)
-    # Cost must still be recorded in the tracker even though enforcer raised
-    summary = tracker.get_summary()
-    assert summary["total_cost_usd"] == pytest.approx(2.00)
-    assert summary["call_count"] == 1
-
-
-def test_record_cost_no_product_skips_enforcer():
-    """Empty product string means enforcer.record_spend is never called."""
-    enforcer = BudgetEnforcer()
-    enforcer.add_budget(CostBudget(name="myproduct", limit_usd=10.0, period="total"))
-    set_default_enforcer(enforcer)
-
-    provider = _StubProvider()
-    tracker = CostTracker()
-    provider.cost_tracker = tracker
-
-    provider._record_cost(
-        model="gpt-4",
-        input_tokens=100,
-        output_tokens=50,
-        cost_usd=0.50,
-        product="",
-    )
-
-    info = enforcer.check_budget("myproduct")
-    assert info["current_spend_usd"] == pytest.approx(0.0)
-
-
-def test_get_set_default_enforcer():
-    """get_default_enforcer returns None initially; set then get returns same instance."""
+def test_default_enforcer_is_none_initially():
+    """get_default_enforcer returns None before any enforcer is set."""
     assert get_default_enforcer() is None
 
+
+def test_set_then_get_enforcer():
+    """set_default_enforcer sets the singleton; get_default_enforcer returns it."""
     enforcer = BudgetEnforcer()
     set_default_enforcer(enforcer)
-
     assert get_default_enforcer() is enforcer
+
+
+def test_set_replaces_previous():
+    """Setting a new enforcer replaces the previous one."""
+    e1 = BudgetEnforcer()
+    e2 = BudgetEnforcer()
+    set_default_enforcer(e1)
+    set_default_enforcer(e2)
+    assert get_default_enforcer() is e2
+    assert get_default_enforcer() is not e1

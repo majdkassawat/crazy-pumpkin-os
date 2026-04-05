@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+import uuid
+from typing import Any, Dict, Optional
 
 
 _tracer: Optional[LangfuseTracer] = None
@@ -11,8 +12,97 @@ _tracer: Optional[LangfuseTracer] = None
 class LangfuseTracer:
     """Wrapper around Langfuse client for tracing LLM calls."""
 
-    def __init__(self, client: Any) -> None:
-        self._client = client
+    def __init__(
+        self,
+        public_key: str = "",
+        secret_key: str = "",
+        host: str = "https://cloud.langfuse.com",
+        product_name: str = "default",
+        *,
+        client: Any = None,
+    ) -> None:
+        self._product_name = product_name
+        self._spans: Dict[str, Any] = {}
+        self._traces: Dict[str, Any] = {}
+
+        if client is not None:
+            # Legacy path: accept a pre-built Langfuse client directly.
+            self._client = client
+        else:
+            try:
+                from langfuse import Langfuse
+            except ImportError:
+                raise ImportError(
+                    "langfuse is required for LangfuseTracer. "
+                    "Install it with: pip install langfuse>=2.0"
+                )
+            self._client = Langfuse(
+                public_key=public_key,
+                secret_key=secret_key,
+                host=host,
+            )
+
+    # ------------------------------------------------------------------
+    # Span lifecycle
+    # ------------------------------------------------------------------
+
+    def start_span(
+        self, name: str, metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Start a new traced span, returning its unique ID."""
+        span_id = uuid.uuid4().hex
+        merged_metadata = {"product_name": self._product_name}
+        if metadata:
+            merged_metadata.update(metadata)
+
+        trace = self._client.trace(name=name, metadata=merged_metadata)
+        span = trace.span(name=name, metadata=merged_metadata)
+
+        self._traces[span_id] = trace
+        self._spans[span_id] = span
+        return span_id
+
+    def end_span(
+        self,
+        span_id: str,
+        output: Optional[str] = None,
+        token_usage: Optional[Dict[str, int]] = None,
+        cost: Optional[float] = None,
+    ) -> None:
+        """End a previously started span, attaching output and cost data."""
+        span = self._spans.pop(span_id, None)
+        if span is None:
+            raise KeyError(f"Unknown span_id: {span_id}")
+
+        update_kwargs: Dict[str, Any] = {}
+        if output is not None:
+            update_kwargs["output"] = output
+        if token_usage is not None:
+            update_kwargs["usage"] = token_usage
+        if cost is not None:
+            update_kwargs["metadata"] = {
+                "product_name": self._product_name,
+                "cost": cost,
+            }
+        span.end(**update_kwargs)
+        self._traces.pop(span_id, None)
+
+    # ------------------------------------------------------------------
+    # Flush / shutdown
+    # ------------------------------------------------------------------
+
+    def flush(self) -> None:
+        """Flush pending traces to Langfuse."""
+        self._client.flush()
+
+    def shutdown(self) -> None:
+        """Flush pending traces and shut down the Langfuse client."""
+        self.flush()
+        self._client.shutdown()
+
+    # ------------------------------------------------------------------
+    # Legacy helpers (kept for backward compatibility)
+    # ------------------------------------------------------------------
 
     def trace_llm_call(
         self,
@@ -42,18 +132,7 @@ class LangfuseTracer:
         input_data: Optional[Any] = None,
         output_data: Optional[Any] = None,
     ) -> None:
-        """Record a named span (non-LLM operation) in Langfuse.
-
-        Use this for tracing tool calls, retrieval steps, agent
-        orchestration phases, or any operation that is not a direct
-        LLM generation.
-
-        Args:
-            name: Identifier for the span (e.g. ``"retrieval/fetch_docs"``).
-            metadata: Arbitrary key-value pairs attached to the span.
-            input_data: The input payload of the operation (any JSON-serialisable value).
-            output_data: The output/result of the operation (any JSON-serialisable value).
-        """
+        """Record a named span (non-LLM operation) in Langfuse."""
         self._client.trace(
             name=name,
             metadata=metadata or {},
@@ -61,22 +140,11 @@ class LangfuseTracer:
             output=output_data,
         )
 
-    def shutdown(self) -> None:
-        """Flush pending traces and shut down the Langfuse client.
-
-        Call this during application teardown to ensure all buffered
-        traces are sent before the process exits. After calling
-        ``shutdown()``, the tracer should not be used for further
-        tracing calls.
-        """
-        self._client.flush()
-        self._client.shutdown()
-
 
 def configure_tracer(client: Any) -> LangfuseTracer:
     """Set the global tracer instance."""
     global _tracer
-    _tracer = LangfuseTracer(client)
+    _tracer = LangfuseTracer(client=client)
     return _tracer
 
 

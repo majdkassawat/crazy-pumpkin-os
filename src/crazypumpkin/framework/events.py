@@ -7,15 +7,24 @@ Listeners can subscribe to specific action types.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import uuid
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable, Generic, TypeVar
 
 from crazypumpkin.framework.models import AuditEvent, _now, _uid
 from crazypumpkin.notifications import notify as _notify
 
+T = TypeVar("T")
+
 logger = logging.getLogger("crazypumpkin.events")
+
+# ---------------------------------------------------------------------------
+# Event type constants
+# ---------------------------------------------------------------------------
+CONFIG_RELOADED = "config.reloaded"
 
 EventHandler = Callable[[AuditEvent], None]
 
@@ -160,3 +169,84 @@ class EventBus:
     @property
     def total_events(self) -> int:
         return len(self._log)
+
+
+# ---------------------------------------------------------------------------
+# Typed event channels
+# ---------------------------------------------------------------------------
+
+
+class EventChannel(Generic[T]):
+    """A typed publish-subscribe channel for a single event type."""
+
+    def __init__(self, name: str, event_type: type[T]) -> None:
+        self.name = name
+        self.event_type = event_type
+        self._subscribers: dict[str, tuple[Callable[[T], Awaitable[None]], Callable[[T], bool] | None]] = {}
+        self._pending_tasks: set[asyncio.Task[None]] = set()
+
+    async def publish(self, event: T) -> None:
+        """Publish an event to all matching subscribers."""
+        tasks: list[asyncio.Task[None]] = []
+        for _sub_id, (handler, filter_fn) in list(self._subscribers.items()):
+            if filter_fn is not None and not filter_fn(event):
+                continue
+            task = asyncio.create_task(handler(event))
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
+            tasks.append(task)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def subscribe(
+        self,
+        handler: Callable[[T], Awaitable[None]],
+        filter_fn: Callable[[T], bool] | None = None,
+    ) -> str:
+        """Subscribe a handler. Returns a subscription_id."""
+        subscription_id = str(uuid.uuid4())
+        self._subscribers[subscription_id] = (handler, filter_fn)
+        return subscription_id
+
+    def unsubscribe(self, subscription_id: str) -> None:
+        """Remove a subscription by its id."""
+        self._subscribers.pop(subscription_id, None)
+
+
+class ChannelRegistry:
+    """Registry that manages named event channels."""
+
+    def __init__(self) -> None:
+        self._channels: dict[str, EventChannel[Any]] = {}
+
+    def get_or_create(self, name: str, event_type: type) -> EventChannel:
+        """Return existing channel or create a new one.
+
+        Raises TypeError if a channel with *name* already exists but was
+        created with a different *event_type*.
+        """
+        existing = self._channels.get(name)
+        if existing is not None:
+            if existing.event_type is not event_type:
+                raise TypeError(
+                    f"Channel {name!r} already registered with event_type "
+                    f"{existing.event_type!r}, cannot re-register with {event_type!r}"
+                )
+            return existing
+        channel: EventChannel = EventChannel(name, event_type)
+        self._channels[name] = channel
+        return channel
+
+    def list_channels(self) -> list[str]:
+        """Return names of all registered channels."""
+        return list(self._channels.keys())
+
+    async def shutdown(self) -> None:
+        """Cancel all pending deliveries across all channels."""
+        for channel in self._channels.values():
+            for task in list(channel._pending_tasks):
+                task.cancel()
+            # Wait for cancellations to propagate
+            if channel._pending_tasks:
+                await asyncio.gather(*channel._pending_tasks, return_exceptions=True)
+        self._channels.clear()

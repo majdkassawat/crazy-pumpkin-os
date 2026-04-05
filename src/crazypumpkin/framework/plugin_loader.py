@@ -128,51 +128,166 @@ def check_requires(
     return errors
 
 
-def discover_plugins(plugins_dir: str | Path | None = None) -> list[PluginManifest]:
-    """Discover plugins from entry-points and a local plugins directory.
+_UNSET = object()
 
-    Scans:
-      1. Python entry-points in the ``crazypumpkin.plugins`` group.
-      2. A local plugins directory (defaults to ``src/crazypumpkin/plugins/``).
 
-    Returns a list of :class:`PluginManifest` instances (one per discovered
-    plugin).  Duplicates (same name) are kept — callers should validate.
+def discover_plugins(group: str = ENTRY_POINT_GROUP, plugins_dir: str | Path | None = _UNSET) -> list[PluginManifest]:  # type: ignore[assignment]
+    """Scan installed packages for entry-points in the given group and return validated manifests.
+
+    Each entry-point should resolve to a module exporting a ``plugin_manifest``
+    dict (keys: name, version, agent_class, config_schema).  The function
+    validates each dict into a :class:`PluginManifest` model.  Invalid or
+    missing manifest dicts are skipped with a warning log.
+
+    When *plugins_dir* is provided, also scans a local directory for ``.py``
+    files (backward-compatible path).
     """
     manifests: list[PluginManifest] = []
 
-    # 1. Entry-points
+    # 1. Entry-points — load module and validate plugin_manifest dict
     if sys.version_info >= (3, 12):
         from importlib.metadata import entry_points
-        eps = entry_points(group=ENTRY_POINT_GROUP)
+        eps = entry_points(group=group)
     else:
         from importlib.metadata import entry_points
         all_eps = entry_points()
+        eps = all_eps.get(group, [])  # type: ignore[union-attr]
+
+    for ep in eps:
+        try:
+            module_path = ep.value.split(":")[0]
+            mod = importlib.import_module(module_path)
+        except Exception as exc:
+            logger.warning("Entry-point '%s' failed to load: %s", ep.name, exc)
+            continue
+
+        manifest_dict = getattr(mod, "plugin_manifest", None)
+        if not isinstance(manifest_dict, dict):
+            logger.warning(
+                "Entry-point '%s': module has no plugin_manifest dict; skipping",
+                ep.name,
+            )
+            continue
+
+        try:
+            manifest = PluginManifest(
+                name=manifest_dict["name"],
+                version=manifest_dict["version"],
+                agent_class=manifest_dict["agent_class"],
+                config_schema=manifest_dict.get("config_schema"),
+                entry_point=ep.value,
+            )
+        except (KeyError, TypeError) as exc:
+            logger.warning(
+                "Entry-point '%s': invalid manifest dict (%s); skipping",
+                ep.name,
+                exc,
+            )
+            continue
+
+        manifests.append(manifest)
+
+    # 2. Local plugins directory (backward-compatible path)
+    if plugins_dir is not _UNSET:
+        if plugins_dir is None:
+            plugins_dir = Path(__file__).resolve().parent.parent / "plugins"
+        else:
+            plugins_dir = Path(plugins_dir)
+
+        if plugins_dir.is_dir():
+            for child in sorted(plugins_dir.iterdir()):
+                if child.suffix == ".py" and child.name != "__init__.py":
+                    module_name = child.stem
+                    manifests.append(PluginManifest(
+                        name=module_name,
+                        entry_point=f"crazypumpkin.plugins.{module_name}",
+                        plugin_type="agent",
+                    ))
+
+    return manifests
+
+
+def discover_entry_point_plugins() -> list[PluginManifest]:
+    """Discover plugins via the ``crazypumpkin.plugins`` entry-point group.
+
+    Each entry point should resolve to a module containing a
+    ``plugin_manifest() -> PluginManifest`` callable.  If the callable is
+    missing or raises, a warning is logged and the entry point is skipped.
+
+    Returns a list of :class:`PluginManifest` instances.
+    """
+    from importlib.metadata import entry_points as _entry_points
+
+    manifests: list[PluginManifest] = []
+
+    if sys.version_info >= (3, 12):
+        eps = _entry_points(group=ENTRY_POINT_GROUP)
+    else:
+        all_eps = _entry_points()
         eps = all_eps.get(ENTRY_POINT_GROUP, [])  # type: ignore[union-attr]
 
     for ep in eps:
-        manifests.append(PluginManifest(
-            name=ep.name,
-            entry_point=ep.value,
-            plugin_type="agent",
-        ))
+        try:
+            module_path = ep.value.split(":")[0]
+            mod = importlib.import_module(module_path)
+        except Exception as exc:
+            logger.warning("Entry-point '%s' failed to load: %s", ep.name, exc)
+            continue
 
-    # 2. Local plugins directory
-    if plugins_dir is None:
-        plugins_dir = Path(__file__).resolve().parent.parent / "plugins"
-    else:
-        plugins_dir = Path(plugins_dir)
+        manifest_fn = getattr(mod, "plugin_manifest", None)
+        if manifest_fn is None:
+            logger.warning(
+                "Entry-point '%s': module has no plugin_manifest() callable; skipping",
+                ep.name,
+            )
+            continue
 
-    if plugins_dir.is_dir():
-        for child in sorted(plugins_dir.iterdir()):
-            if child.suffix == ".py" and child.name != "__init__.py":
-                module_name = child.stem
-                manifests.append(PluginManifest(
-                    name=module_name,
-                    entry_point=f"crazypumpkin.plugins.{module_name}",
-                    plugin_type="agent",
-                ))
+        try:
+            manifest = manifest_fn()
+        except Exception as exc:
+            logger.warning(
+                "Entry-point '%s': plugin_manifest() raised %s; skipping",
+                ep.name,
+                exc,
+            )
+            continue
+
+        manifests.append(manifest)
 
     return manifests
+
+
+def get_plugin_info(name: str) -> PluginManifest | None:
+    """Return the :class:`PluginManifest` for the plugin with the given *name*, or ``None``."""
+    for plugin in discover_entry_point_plugins():
+        if plugin.name == name:
+            return plugin
+    return None
+
+
+def load_plugins(plugins_dir: str | Path | None = None) -> list[PluginManifest]:
+    """Load plugins from directory and entry-points, deduplicating by name.
+
+    Directory-based plugins are loaded first, then entry-point plugins.
+    Duplicates (by name) are skipped — the first occurrence wins.
+    """
+    dir_manifests = discover_plugins(plugins_dir=plugins_dir)
+    ep_manifests = discover_entry_point_plugins()
+
+    seen_names: set[str] = set()
+    merged: list[PluginManifest] = []
+
+    for m in dir_manifests:
+        if m.name not in seen_names:
+            seen_names.add(m.name)
+            merged.append(m)
+
+    for m in ep_manifests:
+        if m.name not in seen_names:
+            seen_names.add(m.name)
+            merged.append(m)
+
+    return merged
 
 
 def validate_plugin(manifest: PluginManifest) -> list[str]:

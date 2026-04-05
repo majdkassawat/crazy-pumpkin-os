@@ -2,9 +2,34 @@
 
 from __future__ import annotations
 
+import time
 import threading
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Callable, Optional
+
+
+class AlertLevel(Enum):
+    WARNING = "warning"    # e.g. 80% of cap
+    CRITICAL = "critical"  # e.g. 95% of cap
+    EXCEEDED = "exceeded"  # 100%+
+
+
+@dataclass
+class BudgetThreshold:
+    warning_pct: float = 0.8
+    critical_pct: float = 0.95
+    notification_channels: list[str] = field(default_factory=lambda: ["slack"])
+    cooldown_seconds: int = 3600  # avoid alert storms
+
+
+@dataclass
+class BudgetAlert:
+    level: AlertLevel
+    agent_name: str
+    current_spend: float
+    limit: float
+    message: str
 
 
 @dataclass
@@ -41,12 +66,14 @@ class BudgetExceededError(Exception):
 class BudgetEnforcer:
     """Tracks spend against configured budgets and fires callbacks on threshold crossings."""
 
-    def __init__(self) -> None:
+    def __init__(self, threshold: Optional[BudgetThreshold] = None) -> None:
         self._lock = threading.Lock()
         self._budgets: dict[str, CostBudget] = {}
         self._spend: dict[str, float] = {}
         self._warned: set[str] = set()
         self._warning_callbacks: list[Callable[[str, float, float], None]] = []
+        self._threshold = threshold or BudgetThreshold()
+        self._last_alert_time: dict[str, float] = {}
 
     def add_budget(self, budget: CostBudget) -> None:
         with self._lock:
@@ -107,9 +134,44 @@ class BudgetEnforcer:
                 }
             return result
 
+    def check_thresholds(self, agent_name: str) -> Optional[BudgetAlert]:
+        """Compare current spend against configured thresholds, return alert if crossed."""
+        with self._lock:
+            if agent_name not in self._budgets:
+                raise KeyError(f"No budget registered for {agent_name!r}")
+            budget = self._budgets[agent_name]
+            current = self._spend.get(agent_name, 0.0)
+            ratio = current / budget.limit_usd
+
+            if ratio >= 1.0:
+                level = AlertLevel.EXCEEDED
+            elif ratio >= self._threshold.critical_pct:
+                level = AlertLevel.CRITICAL
+            elif ratio >= self._threshold.warning_pct:
+                level = AlertLevel.WARNING
+            else:
+                return None
+
+            # Cooldown check
+            now = time.monotonic()
+            last = self._last_alert_time.get(agent_name, 0.0)
+            if now - last < self._threshold.cooldown_seconds:
+                return None
+
+            self._last_alert_time[agent_name] = now
+            pct_str = f"{ratio * 100:.1f}%"
+            return BudgetAlert(
+                level=level,
+                agent_name=agent_name,
+                current_spend=current,
+                limit=budget.limit_usd,
+                message=f"{agent_name} at {pct_str} of ${budget.limit_usd:.2f} budget ({level.value})",
+            )
+
     def reset(self) -> None:
         with self._lock:
             self._budgets.clear()
             self._spend.clear()
             self._warned.clear()
             self._warning_callbacks.clear()
+            self._last_alert_time.clear()

@@ -110,7 +110,8 @@ def test_cmd_doctor_all_pass(capsys):
     """When everything is healthy, doctor prints 'All checks passed.'."""
     with patch("crazypumpkin.cli.doctor._check_python_version", return_value=(True, "Python OK")), \
          patch("crazypumpkin.cli.doctor._check_dependencies", return_value=[(True, "dep OK")]), \
-         patch("crazypumpkin.cli.doctor._check_config", return_value=(True, "config OK")):
+         patch("crazypumpkin.cli.doctor._check_config", return_value=(True, "config OK")), \
+         patch("crazypumpkin.cli.doctor._check_tracing", return_value=(True, "tracing OK")):
         cmd_doctor(MagicMock())
 
     output = capsys.readouterr().out
@@ -122,7 +123,8 @@ def test_cmd_doctor_failure_exits(capsys):
     """When a check fails, doctor exits with code 1."""
     with patch("crazypumpkin.cli.doctor._check_python_version", return_value=(False, "Python too old")), \
          patch("crazypumpkin.cli.doctor._check_dependencies", return_value=[]), \
-         patch("crazypumpkin.cli.doctor._check_config", return_value=(True, "config OK")):
+         patch("crazypumpkin.cli.doctor._check_config", return_value=(True, "config OK")), \
+         patch("crazypumpkin.cli.doctor._check_tracing", return_value=(True, "tracing OK")):
         with pytest.raises(SystemExit) as exc_info:
             cmd_doctor(MagicMock())
 
@@ -139,7 +141,8 @@ def test_cmd_doctor_dep_failure(capsys):
              (True, "pyyaml installed"),
              (False, "httpx not installed"),
          ]), \
-         patch("crazypumpkin.cli.doctor._check_config", return_value=(True, "OK")):
+         patch("crazypumpkin.cli.doctor._check_config", return_value=(True, "OK")), \
+         patch("crazypumpkin.cli.doctor._check_tracing", return_value=(True, "tracing OK")):
         with pytest.raises(SystemExit) as exc_info:
             cmd_doctor(MagicMock())
 

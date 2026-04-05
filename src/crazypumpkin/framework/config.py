@@ -3,12 +3,96 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import yaml
+from pydantic import BaseModel, ValidationError
 
 from .models import AgentDefinition, AgentRole, ProductConfig
 from .paths import get_project_root, resolve_path
+
+
+# ---------------------------------------------------------------------------
+# Pydantic-based PipelineConfig for schema validation & hot-reload
+# ---------------------------------------------------------------------------
+
+
+class PipelineConfig(BaseModel):
+    """Pydantic schema for the full pipeline configuration.
+
+    Used by :mod:`crazypumpkin.config.validation` for schema-level
+    validation and by :meth:`apply_reload` for hot-reload diffing.
+    """
+    model_config = {"extra": "allow"}
+
+    company: dict[str, Any] = {}
+    products: list[dict[str, Any]] = []
+    llm: dict[str, Any] = {}
+    agents: list[dict[str, Any]] = []
+    pipeline: dict[str, Any] = {}
+    notifications: dict[str, Any] = {}
+    dashboard: dict[str, Any] = {}
+    voice: dict[str, Any] = {}
+    triggers: list[Any] = []
+    plugins: list[Any] = []
+    observability: dict[str, Any] = {}
+    scheduler: dict[str, Any] = {}
+    tracing: dict[str, Any] = {}
+
+    def apply_reload(
+        self,
+        new_raw: dict,
+        event_bus: Optional[Any] = None,
+    ) -> list["ConfigChange"]:
+        """Apply a new config dict, returning a list of changed fields.
+
+        1. Validates *new_raw* via :func:`crazypumpkin.config.validation.validate_config`.
+        2. Diffs against current values, building a :class:`ConfigChange` list.
+        3. Updates ``self`` in-place for changed fields.
+        4. If *event_bus* is provided, emits a ``config.reloaded`` event.
+        5. Returns the list of changes (empty if nothing changed).
+
+        Raises :class:`pydantic.ValidationError` if *new_raw* is invalid,
+        leaving the current config untouched.
+        """
+        # Validate — raises ValidationError on bad input
+        PipelineConfig.model_validate(new_raw)
+
+        changes: list[ConfigChange] = []
+        fields = PipelineConfig.model_fields
+        for field_name in fields:
+            old_value = getattr(self, field_name)
+            new_value = new_raw.get(field_name, fields[field_name].default)
+            if old_value != new_value:
+                changes.append(ConfigChange(
+                    field=field_name,
+                    old_value=old_value,
+                    new_value=new_value,
+                ))
+                setattr(self, field_name, new_value)
+
+        if event_bus is not None and changes:
+            from .events import EventBus, CONFIG_RELOADED
+            event_bus.emit(
+                agent_id="system",
+                action=CONFIG_RELOADED,
+                entity_type="config",
+                detail=f"{len(changes)} field(s) changed",
+                metadata={"changes": [
+                    {"field": c.field, "old_value": c.old_value, "new_value": c.new_value}
+                    for c in changes
+                ]},
+            )
+
+        return changes
+
+
+@dataclass
+class ConfigChange:
+    """Describes a single field-level change during config reload."""
+    field: str
+    old_value: object
+    new_value: object
 
 
 def _expand_vars(value: Any) -> Any:
@@ -27,6 +111,16 @@ def _expand_vars(value: Any) -> Any:
 
 
 @dataclass
+class TracingConfig:
+    """Configuration for LLM call tracing / observability."""
+    enabled: bool = False
+    provider: str = 'langfuse'
+    public_key: str = ''
+    secret_key: str = ''
+    host: str = 'https://cloud.langfuse.com'
+
+
+@dataclass
 class Config:
     """Typed, validated configuration object."""
     company: dict[str, Any] = field(default_factory=dict)
@@ -37,6 +131,7 @@ class Config:
     notifications: dict[str, Any] = field(default_factory=dict)
     dashboard: dict[str, Any] = field(default_factory=dict)
     voice: dict[str, Any] = field(default_factory=dict)
+    tracing: TracingConfig = field(default_factory=TracingConfig)
 
 
 def _validate_and_build(raw: dict, project_root: Path) -> Config:
@@ -221,6 +316,16 @@ def _validate_and_build(raw: dict, project_root: Path) -> Config:
     pipeline.setdefault("cycle_interval", 30)
     pipeline["cycle_interval"] = int(pipeline["cycle_interval"])
 
+    # tracing
+    tracing_raw = raw.get("tracing") or {}
+    tracing = TracingConfig(
+        enabled=bool(tracing_raw.get("enabled", False)),
+        provider=str(tracing_raw.get("provider", "langfuse")),
+        public_key=str(tracing_raw.get("public_key", "")),
+        secret_key=str(tracing_raw.get("secret_key", "")),
+        host=str(tracing_raw.get("host", "https://cloud.langfuse.com")),
+    )
+
     return Config(
         company=company,
         products=parsed_products,
@@ -230,6 +335,7 @@ def _validate_and_build(raw: dict, project_root: Path) -> Config:
         notifications=raw.get("notifications") or {},
         dashboard=raw.get("dashboard") or {},
         voice=raw.get("voice") or {},
+        tracing=tracing,
     )
 
 
@@ -372,6 +478,14 @@ def save_config(config: Config, project_root: Path | None = None) -> None:
             "auto_pm": p.auto_pm,
         })
 
+    tracing_raw = {
+        "enabled": config.tracing.enabled,
+        "provider": config.tracing.provider,
+        "public_key": config.tracing.public_key,
+        "secret_key": config.tracing.secret_key,
+        "host": config.tracing.host,
+    }
+
     raw: dict[str, Any] = {
         "company": config.company,
         "products": products_raw,
@@ -381,6 +495,7 @@ def save_config(config: Config, project_root: Path | None = None) -> None:
         "notifications": config.notifications,
         "dashboard": config.dashboard,
         "voice": config.voice,
+        "tracing": tracing_raw,
     }
 
     yaml_path = project_root / "config.yaml"
